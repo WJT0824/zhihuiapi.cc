@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>&#37061;&#32472;AI&#31215;&#20998;&#30721;&#29983;&#25104;&#22120;</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+        background: #10141b;
+        color: #eef2f6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: radial-gradient(circle at 14% 12%, rgba(61, 214, 163, 0.14), transparent 28%), #10141b;
+      }
+      button, input, textarea { font: inherit; }
+      .shell {
+        display: grid;
+        gap: 16px;
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 22px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      h1, p { margin: 0; }
+      h1 { font-size: 22px; }
+      header p {
+        margin-top: 6px;
+        color: #9faabd;
+        font-size: 13px;
+      }
+      .balance-rule {
+        border: 1px solid rgba(246, 198, 89, 0.35);
+        border-radius: 8px;
+        padding: 9px 12px;
+        background: rgba(246, 198, 89, 0.1);
+        color: #ffe6ad;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+        gap: 16px;
+      }
+      .panel {
+        display: grid;
+        gap: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.11);
+        border-radius: 8px;
+        padding: 16px;
+        background: #171d27;
+        box-shadow: 0 20px 48px rgba(0, 0, 0, 0.24);
+      }
+      label {
+        display: grid;
+        gap: 7px;
+        color: #aeb8c6;
+        font-size: 13px;
+      }
+      input, textarea {
+        width: 100%;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        background: #0d121a;
+        color: #eef2f6;
+        outline: 0;
+        padding: 10px 11px;
+      }
+      input:focus, textarea:focus { border-color: rgba(61, 214, 163, 0.7); }
+      .amounts {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 9px;
+      }
+      .amounts button {
+        display: grid;
+        gap: 4px;
+        min-height: 72px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        background: #111720;
+        color: #eef2f6;
+        cursor: pointer;
+      }
+      .amounts button.active {
+        border-color: rgba(246, 198, 89, 0.75);
+        background: rgba(246, 198, 89, 0.14);
+        color: #fff0c2;
+      }
+      .amounts strong { font-size: 19px; }
+      .amounts span {
+        color: #aeb8c6;
+        font-size: 12px;
+      }
+      .switch-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: #111720;
+      }
+      .switch-row input {
+        width: 18px;
+        height: 18px;
+      }
+      .switch-row strong { display: block; margin-bottom: 4px; }
+      .switch-row p { color: #9faabd; font-size: 12px; }
+      .actions {
+        display: flex;
+        gap: 10px;
+      }
+      button.action {
+        display: inline-flex;
+        min-height: 40px;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        padding: 0 15px;
+        background: #202735;
+        color: #edf2f7;
+        cursor: pointer;
+      }
+      button.primary {
+        flex: 1;
+        border-color: rgba(61, 214, 163, 0.65);
+        background: #2ac48f;
+        color: #04110c;
+        font-weight: 900;
+      }
+      textarea {
+        min-height: 250px;
+        resize: vertical;
+        line-height: 1.55;
+      }
+      .summary {
+        display: grid;
+        gap: 8px;
+        border-radius: 8px;
+        padding: 12px;
+        background: #111720;
+        color: #c7d2df;
+        font-size: 13px;
+      }
+      .summary b { color: #ffe6ad; }
+      .message {
+        min-height: 22px;
+        color: #7ce3bc;
+        font-size: 13px;
+      }
+      .message.error { color: #ffabc0; }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <div>
+          <h1>&#37061;&#32472;AI&#30011;&#24067; - &#31215;&#20998;&#30721;&#29983;&#25104;&#22120;</h1>
+          <p>&#31649;&#29702;&#21592;&#19987;&#29992;&#12290;&#29983;&#25104;&#21518;&#33258;&#21160;&#22797;&#21046;&#65292;&#21457;&#32473;&#29992;&#25143;&#22312;&#38065;&#21253;&#37324;&#20817;&#25442;&#12290;</p>
+        </div>
+        <div class="balance-rule">&#165;1 = 10 &#31215;&#20998;</div>
+      </header>
+
+      <section class="grid">
+        <div class="panel">
+          <label>
+            &#29992;&#25143;&#26165;&#31216;
+            <input id="user" value="*" placeholder="&#36755;&#20837;&#29992;&#25143;&#30331;&#24405;&#26165;&#31216;&#65292;&#25110;&#36755;&#20837; * &#29983;&#25104;&#36890;&#29992;&#30721;" />
+          </label>
+
+          <div>
+            <label>&#20805;&#20540;&#37329;&#39069;</label>
+            <div class="amounts" id="amounts"></div>
+          </div>
+
+          <div class="switch-row">
+            <div>
+              <strong>&#27704;&#20037;&#26377;&#25928;</strong>
+              <p>&#40664;&#35748;&#27704;&#20037;&#65292;&#19981;&#38656;&#35201;&#29992;&#25143;&#21453;&#22797;&#25442;&#30721;&#12290;</p>
+            </div>
+            <input id="permanent" type="checkbox" checked />
+          </div>
+
+          <label id="daysWrap" style="display: none">
+            &#26377;&#25928;&#22825;&#25968;
+            <input id="days" type="number" min="1" value="30" />
+          </label>
+
+          <div class="actions">
+            <button class="action primary" id="generate">&#29983;&#25104;&#24182;&#22797;&#21046;&#31215;&#20998;&#30721;</button>
+            <button class="action" id="clear">&#28165;&#31354;</button>
+          </div>
+          <div class="message" id="message"></div>
+        </div>
+
+        <div class="panel">
+          <div class="summary" id="summary"></div>
+          <textarea id="code" readonly placeholder="&#29983;&#25104;&#21518;&#30340; ZHRC1 &#31215;&#20998;&#30721;&#20250;&#26174;&#31034;&#22312;&#36825;&#37324;"></textarea>
+          <div class="actions">
+            <button class="action primary" id="copy">&#22797;&#21046;&#31215;&#20998;&#30721;</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const { ipcRenderer } = require("electron");
+      const amounts = [10, 20, 30, 50, 100, 200];
+      const text = {
+        permanent: "\u6c38\u4e45",
+        days: "\u5929",
+        user: "\u7528\u6237",
+        amount: "\u91d1\u989d",
+        points: "\u79ef\u5206",
+        validity: "\u6709\u6548\u671f",
+        success: "\u751f\u6210\u6210\u529f\uff0c\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f\u3002",
+        noCode: "\u8fd8\u6ca1\u6709\u751f\u6210\u79ef\u5206\u7801\u3002",
+        copied: "\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f\u3002"
+      };
+      let selectedAmount = 10;
+      let latestCode = "";
+
+      const user = document.getElementById("user");
+      const permanent = document.getElementById("permanent");
+      const days = document.getElementById("days");
+      const daysWrap = document.getElementById("daysWrap");
+      const amountRoot = document.getElementById("amounts");
+      const summary = document.getElementById("summary");
+      const code = document.getElementById("code");
+      const message = document.getElementById("message");
+
+      function renderAmounts() {
+        amountRoot.innerHTML = "";
+        for (const amount of amounts) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = selectedAmount === amount ? "active" : "";
+          button.innerHTML = `<strong>&#165;${amount}</strong><span>${amount * 10} ${text.points}</span>`;
+          button.addEventListener("click", () => {
+            selectedAmount = amount;
+            renderAmounts();
+            renderSummary();
+          });
+          amountRoot.appendChild(button);
+        }
+      }
+
+      function renderSummary(result) {
+        const nickname = user.value.trim() || "*";
+        const points = selectedAmount * 10;
+        const expires = permanent.checked ? text.permanent : `${Math.max(1, Number(days.value) || 30)} ${text.days}`;
+        const actualExpires = result?.payload?.expiresAt === result?.permanentExpiresAt ? text.permanent : result?.payload?.expiresAt;
+        summary.innerHTML = `
+          <div>${text.user}：<b>${result?.payload?.user || nickname}</b></div>
+          <div>${text.amount}：<b>&#165;${result?.payload?.amountCny || selectedAmount}</b></div>
+          <div>${text.points}：<b>${result?.payload?.points || points}</b></div>
+          <div>${text.validity}：<b>${actualExpires || expires}</b></div>
+        `;
+      }
+
+      function setMessage(value, error = false) {
+        message.textContent = value;
+        message.className = error ? "message error" : "message";
+      }
+
+      permanent.addEventListener("change", () => {
+        daysWrap.style.display = permanent.checked ? "none" : "grid";
+        renderSummary();
+      });
+      user.addEventListener("input", renderSummary);
+      days.addEventListener("input", renderSummary);
+
+      document.getElementById("generate").addEventListener("click", async () => {
+        setMessage("");
+        try {
+          const result = await ipcRenderer.invoke("recharge.generate", {
+            user: user.value,
+            amountCny: selectedAmount,
+            permanent: permanent.checked,
+            days: permanent.checked ? undefined : Number(days.value),
+          });
+          latestCode = result.code;
+          code.value = result.code;
+          renderSummary(result);
+          setMessage(text.success);
+        } catch (error) {
+          setMessage(error?.message || String(error), true);
+        }
+      });
+
+      document.getElementById("copy").addEventListener("click", async () => {
+        if (!latestCode && !code.value) {
+          setMessage(text.noCode, true);
+          return;
+        }
+        await ipcRenderer.invoke("recharge.copy", latestCode || code.value);
+        setMessage(text.copied);
+      });
+
+      document.getElementById("clear").addEventListener("click", () => {
+        user.value = "*";
+        selectedAmount = 10;
+        permanent.checked = true;
+        days.value = 30;
+        latestCode = "";
+        code.value = "";
+        daysWrap.style.display = "none";
+        renderAmounts();
+        renderSummary();
+        setMessage("");
+      });
+
+      renderAmounts();
+      renderSummary();
+    </script>
+  </body>
+</html>

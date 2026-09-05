@@ -1,0 +1,94 @@
+{
+  "name": "zhihui-ai-canvas",
+  "version": "0.1.27",
+  "description": "郅绘ai画布 - Windows desktop infinite canvas for AI ecommerce and advertising design.",
+  "main": "dist-electron/main.js",
+  "author": "Zhihui AI Canvas",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.mjs",
+    "start:web": "node server/index.mjs",
+    "test:web": "node --test tests/web-server.test.mjs",
+    "dev": "concurrently -k \"vite\" \"vite build --config electron.vite.config.ts --watch\" \"vite build --config electron.preload.vite.config.ts --watch\" \"wait-on tcp:5173 dist-electron/main.js dist-electron/preload.cjs && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "build": "tsc --noEmit && vite build && vite build --config electron.vite.config.ts && vite build --config electron.preload.vite.config.ts && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win nsis --publish never --config.npmRebuild=false",
+    "build:renderer": "tsc --noEmit && vite build && vite build --config electron.vite.config.ts && vite build --config electron.preload.vite.config.ts",
+    "build:renderer:legacy": "cross-env ZH_CANVAS_BILLING=disabled tsc --noEmit && cross-env ZH_CANVAS_BILLING=disabled vite build && cross-env ZH_CANVAS_BILLING=disabled vite build --config electron.vite.config.ts && cross-env ZH_CANVAS_BILLING=disabled vite build --config electron.preload.vite.config.ts",
+    "build:renderer:billing": "cross-env ZH_CANVAS_BILLING=enabled tsc --noEmit && cross-env ZH_CANVAS_BILLING=enabled vite build && cross-env ZH_CANVAS_BILLING=enabled vite build --config electron.vite.config.ts && cross-env ZH_CANVAS_BILLING=enabled vite build --config electron.preload.vite.config.ts",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "lint": "tsc --noEmit",
+    "recharge:code": "node scripts/create-recharge-code.mjs",
+    "recharge:keygen": "node scripts/generate-recharge-key.mjs",
+    "recharge:generator": "node scripts/recharge-code-generator.mjs",
+    "recharge:ui": "electron tools/recharge-code-generator-ui.cjs",
+    "build:recharge-generator": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win nsis --publish never --config electron.recharge-builder.json --config.npmRebuild=false",
+    "build:canvas:0.1.23": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win nsis --publish never --config electron.canvas-0.1.23-builder.json --config.npmRebuild=false",
+    "build:canvas:0.1.26": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win nsis --publish never --config electron.canvas-0.1.26-builder.json --config.npmRebuild=false"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "clsx": "^2.1.1",
+    "electron-store": "^10.0.1",
+    "lucide-react": "^0.468.0",
+    "nanoid": "^5.0.9",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sql.js": "^1.12.0",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitest/ui": "^2.1.8",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "vitest": "^2.1.8",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.zhihui.ai.canvas",
+    "productName": "郅绘ai画布",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "build/icon.ico",
+      "build/icon.png",
+      "node_modules/sql.js/dist/sql-wasm.wasm"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/sql.js/dist/sql-wasm.wasm",
+        "to": "sql-wasm.wasm"
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

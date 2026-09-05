@@ -1,0 +1,42 @@
+{
+  "appId": "com.zhihui.ai.canvas.v0123.multitask",
+  "productName": "\u90c5\u7ed8ai\u753b\u5e03",
+  "directories": {
+    "output": "release-canvas-0.1.23-multitask"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*",
+    "build/icon.ico",
+    "build/icon.png",
+    "node_modules/sql.js/dist/sql-wasm.wasm"
+  ],
+  "extraMetadata": {
+    "version": "0.1.23"
+  },
+  "extraResources": [
+    {
+      "from": "node_modules/sql.js/dist/sql-wasm.wasm",
+      "to": "sql-wasm.wasm"
+    },
+    {
+      "from": "build/icon.ico",
+      "to": "icon.ico"
+    },
+    {
+      "from": "build/icon.png",
+      "to": "icon.png"
+    }
+  ],
+  "win": {
+    "target": "nsis",
+    "icon": "build/icon.ico",
+    "artifactName": "\u90c5\u7ed8ai\u753b\u5e03-0.1.23\u591a\u4efb\u52a1\u7248-${arch}.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "appId": "com.zhihui.ai.recharge.generator",
+  "productName": "\u90c5\u7ed8AI\u79ef\u5206\u7801\u751f\u6210\u5668",
+  "directories": {
+    "output": "release-recharge-generator"
+  },
+  "files": [
+    "tools/recharge-code-generator-ui.cjs",
+    "tools/recharge-code-generator-ui.html",
+    "scripts/recharge-code-lib.mjs",
+    "build/icon.ico",
+    "build/icon.png",
+    "package.json"
+  ],
+  "extraMetadata": {
+    "name": "zhihui-recharge-code-generator",
+    "main": "tools/recharge-code-generator-ui.cjs"
+  },
+  "win": {
+    "target": "nsis",
+    "icon": "build/icon.ico",
+    "artifactName": "${productName}-${version}-${arch}.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
+  }
+}
