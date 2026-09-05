@@ -9,5 +9,6 @@ release-*/
 .env
 .vite/
 data/
+web-dist/
 .env.*
 !.env.example

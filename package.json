@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node server/index.mjs",
     "start:web": "node server/index.mjs",
+    "build:web": "node scripts/build-web.mjs",
     "test:web": "node --test tests/web-server.test.mjs",
     "dev": "concurrently -k \"vite\" \"vite build --config electron.vite.config.ts --watch\" \"vite build --config electron.preload.vite.config.ts --watch\" \"wait-on tcp:5173 dist-electron/main.js dist-electron/preload.cjs && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "build": "tsc --noEmit && vite build && vite build --config electron.vite.config.ts && vite build --config electron.preload.vite.config.ts && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win nsis --publish never --config.npmRebuild=false",
