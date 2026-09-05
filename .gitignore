@@ -10,5 +10,6 @@ release-*/
 .vite/
 data/
 web-dist/
+icon-preview.png
 .env.*
 !.env.example
