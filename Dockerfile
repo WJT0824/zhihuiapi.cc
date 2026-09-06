@@ -6,5 +6,4 @@ COPY server ./server
 COPY web ./web
 RUN mkdir -p /app/data
 EXPOSE 8787
-VOLUME ["/app/data"]
 CMD ["node", "server/index.mjs"]
