@@ -12,6 +12,13 @@ const state = {
     { id: 'n-output', type: 'output', title: '输出预览', x: 1200, y: 470, result: null }
   ],
   selected: 'n-generate',
+  settings: JSON.parse(localStorage.getItem('zh_settings') || '{}'),
+  edges: [
+    { id: 'e1', source: 'n-prompt', target: 'n-generate' },
+    { id: 'e2', source: 'n-image', target: 'n-generate' },
+    { id: 'e3', source: 'n-generate', target: 'n-output' }
+  ],
+  connecting: null,
   camera: { x: 20, y: 10, zoom: 1 },
   tasks: [],
   models: [],
@@ -19,8 +26,8 @@ const state = {
   pendingFile: null,
   toastTimer: null
 };
-const iconMap = { prompt: '✦', image: '▧', generate: '◈', output: '◒' };
-const iconBg = { prompt: 'c-prompt', image: 'c-image', generate: 'c-generate', output: 'c-output' };
+const iconMap = { prompt: '✦', image: '▧', generate: '◈', upscale: '⇪', output: '◒', background: '⌁' };
+const iconBg = { prompt: 'c-prompt', image: 'c-image', generate: 'c-generate', upscale: 'c-generate', background: 'c-image', output: 'c-output' };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const $ = (sel) => document.querySelector(sel);
 const money = (n) => Math.round(Number(n || 0)).toLocaleString();
@@ -60,14 +67,14 @@ function toast(message, tone) {
 function userInitial() { return state.user ? (state.user.nickname || state.user.username || '?' ).slice(0, 1).toUpperCase() : '?'; }
 function topbar(active) {
   const pages = state.user
-    ? [['studio', '创作台', '◇'], ['history', '任务历史', '◷'], ['wallet', '积分中心', '◇'], state.user.role === 'admin' ? ['admin', '运营后台', '▣'] : null]
+    ? [['studio', '创作台', '◇'], ['history', '任务历史', '◷'], ['wallet', '积分中心', '◇'], ['settings', '个人设置', '⚙'], state.user.role === 'admin' ? ['admin', '运营后台', '▣'] : null]
     : [['home', '首页', '⌂']];
   const links = (pages.filter(Boolean)).map(([p, name, ic]) => `<a href="#${p}" class="${active === p ? 'active' : ''}"><i>${ic}</i> <span>${name}</span></a>`).join('');
   return `<header class="topbar">
     <a class="brand" href="#studio"><img class="logo" src="/logo.png" alt="郅绘"><span><b>郅绘</b><small>AI DESIGN WORKSPACE</small></span></a>
     <nav class="topnav">${links}</nav>
     <div class="top-right">
-      ${state.user ? `<div class="account-chip"><span class="avatar">${esc(userInitial())}</span><span class="name">${esc(state.user.nickname || state.user.username || '')}</span><span class="points-pill">${money(state.user.points ?? state.user.credits)} 积分</span></div><button class="iconbtn" data-action="logout" title="退出登录">↪</button>` : `<button class="btn primary" data-action="go-auth">登录 / 注册</button>`}
+      ${state.user ? `<button class="account-chip" data-action="open-settings" title="个人设置"><span class="avatar">${esc(userInitial())}</span><span class="name">${esc(state.user.nickname || state.user.username || '')}</span><span class="points-pill">${money(state.user.points ?? state.user.credits)} 积分</span></button><button class="iconbtn" data-action="logout" title="退出登录">↪</button>` : `<button class="btn primary" data-action="go-auth">登录 / 注册</button>`}
     </div>
   </header>`;
 }
@@ -118,7 +125,7 @@ function authPage() {
 }
 
 function pageTitle(active) {
-  return ({ studio: '创作台', history: '任务历史', wallet: '积分中心', admin: '运营后台' })[active] || '';
+  return ({ studio: '创作台', history: '任务历史', wallet: '积分中心', settings: '个人设置', admin: '运营后台' })[active] || '';
 }
 
 function workspaceShell(content, active) {
@@ -134,7 +141,7 @@ function paletteItem(type, name, desc) {
 function nodeHtml(node) {
   const selected = state.selected === node.id ? ' selected' : '';
   const running = node.status === 'running';
-  const statusBadge = node.type === 'generate' && node.status && node.status !== 'idle'
+  const statusBadge = ['generate', 'upscale', 'background'].includes(node.type) && node.status && node.status !== 'idle'
     ? `<span class="node-status ${node.status === 'failed' ? 'failed' : running ? 'running' : ''}">${node.status === 'running' ? '生成中' : node.status === 'done' ? '已完成' : '失败'}</span>` : '';
   let body = '';
   if (node.type === 'prompt') body = `<div class="preview">${esc(node.value || '点击右侧面板输入创作描述…')}</div>`;
@@ -142,20 +149,24 @@ function nodeHtml(node) {
     ? node.refs.map((r) => r.preview ? `<img class="thumb" src="${r.preview}" alt="">` : '<div class="placeholder">已上传</div>').slice(0, 2).join('')
     : '<div class="placeholder">未添加参考图</div>';
   if (node.type === 'generate') body = `<div class="preview">${esc(node.prompt || '自动收集画布上的提示词节点')}</div><div style="font-size:11px;color:#8b96ad;margin-top:5px">${esc(node.model || '')} · ${esc(node.ratio || '')} · ${esc(node.resolution || '')}</div>`;
+  if (node.type === 'upscale') body = `<div class="preview">${esc(node.prompt || '高清放大，保留细节与材质')}</div><div style="font-size:11px;color:#8b96ad;margin-top:5px">${esc(node.tool || '高清放大')} · ${esc(node.resolution || '4K')}</div>`;
   if (node.type === 'output') body = node.result && node.result.preview ? `<img class="thumb" src="${node.result.preview}" alt="result">` : '<div class="placeholder">生成结果将显示在这里</div>';
+  const hasIn = ['generate', 'upscale', 'background', 'output'].includes(node.type);
+  const hasOut = ['prompt', 'image', 'generate', 'upscale', 'background'].includes(node.type);
   return `<article class="node${selected}" data-node="${node.id}" data-action="select-node" data-id="${node.id}" data-type="${node.type}" style="left:${node.x}px;top:${node.y}px">
     <div class="node-head"><span class="node-icon ${iconBg[node.type]}">${iconMap[node.type]}</span><span class="node-title">${node.title}</span>${statusBadge}</div>
+    <div class="ports">${hasIn ? '<i class="port in" data-port="in" data-node="' + node.id + '" title="输入"></i>' : ''}${hasOut ? '<i class="port out" data-port="out" data-node="' + node.id + '" title="输出"></i>' : ''}</div>
     <div class="node-body">${body}</div>
-    ${node.type === 'generate' ? '<div class="node-actions"><button class="mini-btn" data-action="run-node" data-id="' + node.id + '">▶ 生成此节点</button></div>' : ''}
+    ${['generate', 'upscale', 'background'].includes(node.type) ? '<div class="node-actions"><button class="mini-btn" data-action="run-node" data-id="' + node.id + '">▶ ' + (node.type === 'upscale' ? '高清放大' : node.type === 'background' ? '处理' : '生成') + '</button></div>' : ''}
     <div class="node-actions"><button class="mini-btn" data-action="select-node" data-id="${node.id}">编辑节点</button></div>
   </article>`;
 }
 
 function edgePath(from, to) {
-  const sx = from.x + 222; const sy = from.y + 40;
-  const ex = to.x; const ey = to.y + 40;
+  const sx = from.x + 222; const sy = from.y + 52;
+  const ex = to.x; const ey = to.y + 52;
   const mx = (sx + ex) / 2;
-  return `M ${sx} ${sy} C ${mx + 20} ${sy}, ${mx - 20} ${ey}, ${ex} ${ey}`;
+  return `M ${sx} ${sy} C ${mx + 18} ${sy}, ${mx - 18} ${ey}, ${ex} ${ey}`;
 }
 
 function redrawCanvas() {
@@ -164,12 +175,19 @@ function redrawCanvas() {
   const c = state.camera;
   world.style.transform = `translate(${c.x}px, ${c.y}px) scale(${c.zoom})`;
   const zoom = $('#zoom-label'); if (zoom) zoom.textContent = Math.round(c.zoom * 100) + '%';
-  const generators = state.nodes.filter((n) => n.type === 'generate');
-  const target = generators[0];
-  const sources = state.nodes.filter((n) => n.type === 'prompt' || n.type === 'image');
-  const paths = [];
-  if (target) sources.forEach((n) => { paths.push(n.type === 'prompt' ? edgePath(n, target) : edgePath(n, target).replace('stroke:#b7c3ff', '')); });
-  world.innerHTML = `<svg class="edge-svg" viewBox="0 0 1800 1100" preserveAspectRatio="none"><defs><linearGradient id="edgeGradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#ff8a73"/><stop offset="55%" stop-color="#5a4cf4"/><stop offset="100%" stop-color="#14b8d4"/></linearGradient></defs>${paths.map((d) => `<path class="edge-path" d="${d}"/>`).join('')}</svg>` + state.nodes.map(nodeHtml).join('');
+  const edgeMarkup = state.edges.map((edge) => {
+    const source = state.nodes.find((n) => n.id === edge.source);
+    const target = state.nodes.find((n) => n.id === edge.target);
+    return source && target ? `<path class="edge-path" d="${edgePath(source, target)}"/>` : '';
+  }).join('');
+  let ghost = '';
+  if (state.connecting) {
+    const source = state.nodes.find((n) => n.id === state.connecting.source);
+    if (source) {
+      ghost = `<path class="edge-path ghost" d="${edgePath(source, { x: state.connecting.x, y: state.connecting.y, id: '__ghost__' })}"/>`;
+    }
+  }
+  world.innerHTML = `<svg class="edge-svg" viewBox="0 0 1800 1100" preserveAspectRatio="none"><defs><linearGradient id="edgeGradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#ff8a73"/><stop offset="55%" stop-color="#5a4cf4"/><stop offset="100%" stop-color="#14b8d4"/></linearGradient></defs>${edgeMarkup}${ghost}</svg>` + state.nodes.map(nodeHtml).join('');
 }
 
 function studioPage() {
@@ -183,9 +201,12 @@ function studioPage() {
         ${add('prompt', '提示词', '输入创作想法')}
         ${add('image', '参考图', '上传 1-4 张')}
         ${add('generate', 'AI 生成', '跑当前画布')}
+        ${add('upscale', '高清放大', '4K / 8K 超分')}
         ${add('output', '输出预览', '查看结果')}
       </div>
-      <div class="quick-help">拖动节点调整布局；滚轮缩放；选择节点后在右侧编辑。<br><br>“生成此节点”会自动收集画布里的提示词与参考图。</div>
+      <button class="btn" style="width:100%;margin-top:12px" data-action="upscale-workflow" data-preset="4k">⇪ 完整 4K 修复工作流</button>
+      <button class="btn" style="width:100%;margin-top:8px" data-action="upscale-workflow" data-preset="8k">⇪ 完整 8K 超分工作流</button>
+      <div class="quick-help">拖动节点调整布局；单击选择、双击编辑；右键画布/节点可新建、连接、运行或删除。<br><br>拖动节点左右圆点即可建立节点连接。</div>
       <button class="btn primary" style="width:100%;margin-top:18px" data-action="run-node" data-id="${gen.id}">运行整个工作流</button>
     </aside>
     <div class="canvas-wrap">
@@ -202,6 +223,12 @@ function inspectorHtml(node) {
   let core = '';
   if (node.type === 'prompt') core = `<div class="field"><label>创作提示词</label><textarea class="input" data-node-input="value" data-id="${node.id}">${esc(node.value || '')}</textarea></div>`;
   if (node.type === 'image') core = `<div class="field"><label>参考图片（可多选）</label><input type="file" class="input" id="image-upload" data-id="${node.id}" accept="image/*" multiple><div id="refs-preview">${(node.refs || []).map((r) => r.preview ? `<img class="result-thumb" style="margin-top:7px" src="${r.preview}">` : '').join('')}</div></div>`;
+  if (node.type === 'upscale') core = `
+    <div class="field"><label>放大模式</label><select class="input" data-node-input="tool" data-id="${node.id}"><option value="restore-4k" ${node.tool === 'restore-4k' ? 'selected' : ''}>4K 修复（2x）</option><option value="upscale-8k" ${node.tool === 'upscale-8k' ? 'selected' : ''}>8K 超分（4x）</option><option value="hd-upscale" ${node.tool === 'hd-upscale' ? 'selected' : ''}>自定义高清放大</option></select></div>
+    <div class="field"><label>放大提示（自动接入上游参考图）</label><textarea class="input" data-node-input="prompt" data-id="${node.id}">${esc(node.prompt || '')}</textarea></div>
+    <div class="form-grid"><div class="field"><label>模型</label><select class="input" data-node-input="model" data-id="${node.id}">${modelOptions}</select></div><div class="field"><label>输出分辨率</label><select class="input" data-node-input="resolution" data-id="${node.id}"><option value="2K" ${node.resolution === '2K' ? 'selected' : ''}>2K</option><option value="4K" ${node.resolution === '4K' ? 'selected' : ''}>4K</option></select></div></div>
+    <div class="form-grid"><div class="field"><label>比例</label><select class="input" data-node-input="ratio" data-id="${node.id}">${['1:1', 'auto', '16:9', '3:4'].map((r) => `<option ${node.ratio === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div><div class="field"><label>质量</label><select class="input" data-node-input="quality" data-id="${node.id}">${['high', 'auto', 'medium'].map((r) => `<option ${node.quality === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div></div>
+    <button class="btn primary" style="width:100%;margin-top:18px" data-action="run-node" data-id="${node.id}">开始高清放大</button>`;
   if (node.type === 'generate') core = `
     <div class="field"><label>生成补充提示（可留空）</label><textarea class="input" data-node-input="prompt" data-id="${node.id}">${esc(node.prompt || '')}</textarea></div>
     <div class="field"><label>模型</label><select class="input" data-node-input="model" data-id="${node.id}">${modelOptions}</select></div>
@@ -254,6 +281,43 @@ function walletPage() {
   </div>`, 'wallet');
 }
 
+function settingsPage() {
+  const profile = (state.user && state.user.profile) || {};
+  const saved = Object.assign({}, profile.settings || {}, state.settings);
+  const values = {
+    nickname: state.user.displayName || state.user.nickname || '',
+    defaultModel: saved.defaultModel || 'gpt-image-2',
+    defaultRatio: saved.defaultRatio || '1:1',
+    defaultResolution: saved.defaultResolution || '1K',
+    defaultQuality: saved.defaultQuality || 'auto',
+    outputPosition: saved.outputPosition || '原图右侧',
+    autoCheckUpdates: saved.autoCheckUpdates !== false,
+    rememberHistory: saved.rememberHistory !== false,
+    showStatusTips: saved.showStatusTips !== false
+  };
+  return workspaceShell(`<div style="max-width:760px;margin:0 auto;padding:26px 18px">
+    <div class="panel-card"><h3 style="margin-bottom:18px">个人资料</h3><form id="settings-form">
+      <label class="field"><span>昵称</span><input class="input" name="nickname" minlength="2" value="${esc(values.nickname)}"></label>
+      <div class="form-grid" style="margin-top:14px">
+        <div class="field"><label>默认模型</label><select class="input" name="defaultModel">${state.models.length ? state.models.map((m) => `<option ${(values.defaultModel === (m.modelId || m.id)) ? 'selected' : ''} value="${esc(m.modelId || m.id)}">${esc(m.displayName || m.id)}</option>`).join('') : '<option value="gpt-image-2">GPT Image 2</option>'}</select></div>
+        <div class="field"><label>默认比例</label><select class="input" name="defaultRatio">${['1:1', '4:3', '3:4', '16:9', '9:16'].map((r) => `<option ${values.defaultRatio === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label>默认分辨率</label><select class="input" name="defaultResolution">${['1K', '2K', '4K'].map((r) => `<option ${values.defaultResolution === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
+        <div class="field"><label>默认质量</label><select class="input" name="defaultQuality">${['auto', 'high', 'medium', 'low'].map((r) => `<option ${values.defaultQuality === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
+      </div>
+      <div class="field"><label>生成结果默认放入</label><select class="input" name="outputPosition">${['原图右侧', '当前页中心', '新建页面'].map((r) => `<option ${values.outputPosition === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
+      <div style="display:grid;gap:9px;margin-top:15px">
+        <label style="display:flex;align-items:center;gap:9px;font-size:13px"><input type="checkbox" name="autoCheckUpdates" ${values.autoCheckUpdates ? 'checked' : ''}> 打开插件时自动检查更新</label>
+        <label style="display:flex;align-items:center;gap:9px;font-size:13px"><input type="checkbox" name="rememberHistory" ${values.rememberHistory ? 'checked' : ''}> 保留 AI 生成历史记录</label>
+        <label style="display:flex;align-items:center;gap:9px;font-size:13px"><input type="checkbox" name="showStatusTips" ${values.showStatusTips ? 'checked' : ''}> 显示操作提示与状态消息</label>
+      </div>
+      <button class="btn primary" style="width:100%;margin-top:20px">保存个人设置</button>
+      <p class="error-note" id="settings-error"></p>
+    </form></div>
+  </div>`, 'settings');
+}
+
 async function adminPage() {
   let d = null;
   try { d = await api('/v1/admin/dashboard'); }
@@ -282,6 +346,7 @@ async function render() {
   if (state.page === 'studio') { APP.innerHTML = workspaceShell(studioPage(), 'studio'); bindCanvas(); bindInspectorEvents(); loadModels(); return; }
   if (state.page === 'history') { APP.innerHTML = await historyPage(); return; }
   if (state.page === 'wallet') { APP.innerHTML = walletPage(); bindWallet(); return; }
+  if (state.page === 'settings') { APP.innerHTML = settingsPage(); bindSettings(); return; }
   if (state.page === 'admin') { APP.innerHTML = await adminPage(); bindAdmin(); return; }
   if (state.user) { state.page = 'studio'; location.hash = 'studio'; render(); return; }
   APP.innerHTML = landing(); bindLanding();
@@ -343,14 +408,49 @@ function bindCanvas() {
   const viewport = $('#canvas-viewport');
   if (!viewport) return;
   let panning = null;
+  viewport.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const node = e.target.closest('.node');
+    openContextMenu(e.clientX, e.clientY, node ? node.dataset.node : null);
+  });
+  viewport.addEventListener('dblclick', (e) => {
+    const node = e.target.closest('.node'); if (!node) return;
+    state.selected = node.dataset.node; redrawCanvas();
+    const inspector = $('#inspector'); if (inspector) { inspector.innerHTML = inspectorHtml(state.nodes.find((n) => n.id === state.selected)); bindInspectorEvents(); }
+    const first = inspector && inspector.querySelector('textarea, input:not([type=file])'); if (first) setTimeout(() => first.focus(), 30);
+  });
+  viewport.addEventListener('click', (e) => {
+    const port = e.target.closest('.port');
+    if (!port) { if (state.connecting) { state.connecting = null; redrawCanvas(); } return; }
+    const nodeId = port.dataset.node; const kind = port.dataset.port;
+    const node = state.nodes.find((n) => n.id === nodeId);
+    const rect = viewport.getBoundingClientRect();
+    const worldX = (e.clientX - rect.left - state.camera.x) / state.camera.zoom;
+    const worldY = (e.clientY - rect.top - state.camera.y) / state.camera.zoom;
+    if (kind === 'out') {
+      state.connecting = state.connecting && state.connecting.source === nodeId ? null : { source: nodeId, x: node.x + 222, y: node.y + 52 };
+      redrawCanvas();
+    } else if (kind === 'in' && state.connecting && state.connecting.source !== nodeId) {
+      const exists = state.edges.some((edge) => edge.source === state.connecting.source && edge.target === nodeId);
+      if (!exists) state.edges.push({ id: 'edge-' + Date.now(), source: state.connecting.source, target: nodeId });
+      state.connecting = null;
+      redrawCanvas();
+    }
+  });
   viewport.addEventListener('pointerdown', (e) => {
     const target = e.target.closest('.node');
-    if (target) { if (e.target.closest('button,input,textarea,select')) return; startNodeDrag(e, target.dataset.node); return; }
+    if (target) { if (e.target.closest('button,input,textarea,select,.port')) return; startNodeDrag(e, target.dataset.node); return; }
     panning = { x: e.clientX - state.camera.x, y: e.clientY - state.camera.y };
     viewport.classList.add('panning');
   });
   window.addEventListener('pointermove', (e) => {
     if (panning) { state.camera.x = e.clientX - panning.x; state.camera.y = e.clientY - panning.y; redrawCanvas(); }
+    if (state.connecting) {
+      const rect = viewport.getBoundingClientRect();
+      state.connecting.x = (e.clientX - rect.left - state.camera.x) / state.camera.zoom;
+      state.connecting.y = (e.clientY - rect.top - state.camera.y) / state.camera.zoom;
+      redrawCanvas();
+    }
   });
   window.addEventListener('pointerup', () => { panning = null; viewport && viewport.classList.remove('panning'); state.drag = null; });
   viewport.addEventListener('wheel', (e) => {
@@ -363,7 +463,10 @@ function bindCanvas() {
 
 function startNodeDrag(e, id) {
   const node = state.nodes.find((n) => n.id === id); if (!node) return;
+  e.preventDefault();
   state.selected = id;
+  const inspector = $('#inspector'); if (inspector) { inspector.innerHTML = inspectorHtml(node); bindInspectorEvents(); }
+  redrawCanvas();
   state.drag = { id, dx: e.clientX - node.x, dy: e.clientY - node.y };
   window.addEventListener('pointermove', moveDrag);
   window.addEventListener('pointerup', stopDrag, { once: true });
@@ -407,32 +510,160 @@ async function handleImageUpload(input) {
   const inspector = $('#inspector'); if (inspector) inspector.innerHTML = inspectorHtml(node); bindInspectorEvents();
 }
 
-function addNode(type) {
-  const base = { x: 300 + Math.random() * 150, y: 130 + Math.random() * 240 };
+function addNode(type, x, y) {
+  const base = { x: x !== undefined ? x : 300 + Math.random() * 150, y: y !== undefined ? y : 130 + Math.random() * 240 };
   const node = Object.assign(base, {
     id: 'n-' + type + '-' + Date.now(), type,
-    title: type === 'prompt' ? '提示词节点' : type === 'image' ? '参考图节点' : type === 'generate' ? 'AI 生成节点' : '输出预览',
-    value: '', refs: [], prompt: '', model: 'gpt-image-2', ratio: '1:1', resolution: '1K', quality: 'auto', status: 'idle', result: null
+    title: type === 'prompt' ? '提示词节点' : type === 'image' ? '参考图节点' : type === 'generate' ? 'AI 生成节点' : type === 'upscale' ? '高清放大节点' : type === 'background' ? '图像处理节点' : '输出预览',
+    value: '', refs: [], prompt: '', model: 'gpt-image-2', ratio: '1:1', resolution: '1K', quality: 'auto', tool: type === 'upscale' ? 'restore-4k' : '', status: 'idle', result: null
   });
   state.nodes.push(node); state.selected = node.id; redrawCanvas();
   const inspector = $('#inspector'); if (inspector) inspector.innerHTML = inspectorHtml(node); bindInspectorEvents();
 }
 
+function duplicateNode(id) {
+  const source = state.nodes.find((n) => n.id === id); if (!source) return;
+  const copy = JSON.parse(JSON.stringify(source));
+  copy.id = source.type + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+  copy.x = Math.min(1500, source.x + 34); copy.y = Math.min(820, source.y + 34);
+  copy.status = copy.type === 'generate' ? 'idle' : copy.status;
+  copy.result = null;
+  if (copy.type === 'image' && copy.refs) copy.refs = copy.refs.map((r) => ({ ...r }));
+  state.nodes.push(copy); state.selected = copy.id;
+  redrawCanvas();
+  const inspector = $('#inspector'); if (inspector) inspector.innerHTML = inspectorHtml(copy); bindInspectorEvents();
+}
+
+function createUpscaleWorkflow(preset) {
+  preset = preset === '8k' ? '8k' : '4k';
+  const tool = preset === '8k' ? 'upscale-8k' : 'restore-4k';
+  let image = state.nodes.find((n) => n.type === 'image');
+  if (!image) { addNode('image', 330, 560); image = state.nodes[state.nodes.length - 1]; }
+  const up = {
+    id: 'n-upscale-' + Date.now(), type: 'upscale', title: preset === '8k' ? '8K 超分节点' : '4K 修复节点',
+    x: 800, y: 330, model: 'gpt-image-2', ratio: '1:1', resolution: '4K', quality: 'high', status: 'idle', result: null,
+    tool,
+    prompt: preset === '8k' ? '进行8K级超分辨率处理，保留真实细节，不改变主体和构图' : '高质量修复图片，恢复细节、纹理和清晰度，保持主体与构图不变'
+  };
+  state.nodes.push(up);
+  const out = { id: 'n-output-' + Date.now(), type: 'output', title: '高清输出', x: 1430, y: 520, result: null };
+  state.nodes.push(out);
+  state.edges = state.edges.filter((e) => e.source !== up.id && e.target !== up.id);
+  state.edges.push({ id: 'edge-img-up-' + Date.now(), source: image.id, target: up.id });
+  state.edges.push({ id: 'edge-up-out-' + Date.now(), source: up.id, target: out.id });
+  state.selected = up.id;
+  redrawCanvas();
+  const inspector = $('#inspector'); if (inspector) inspector.innerHTML = inspectorHtml(up); bindInspectorEvents();
+  toast('已配置完整高清放大工作流：上传参考图后运行该节点', 'ok');
+}
+
+function closeContextMenu() { const menu = $('#node-context-menu'); if (menu) menu.remove(); }
+
+function openContextMenu(x, y, nodeId) {
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.id = 'node-context-menu';
+  menu.style.cssText = 'position:fixed;z-index:150;min-width:190px;background:#fff;border:1px solid #dfe6f2;border-radius:14px;box-shadow:0 18px 50px rgba(25,35,70,.2);padding:6px;font-size:13px';
+  const button = (label, action, extra) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.dataset.menuAction = action;
+    if (extra) b.dataset.menuId = extra;
+    b.style.cssText = 'display:block;width:100%;text-align:left;padding:9px 11px;border:0;border-radius:9px;background:transparent;font-weight:600;color:#3d4865';
+    b.addEventListener('mouseenter', () => { b.style.background = '#eef1ff'; b.style.color = '#4f5dfa'; });
+    b.addEventListener('mouseleave', () => { b.style.background = ''; b.style.color = '#3d4865'; });
+    return b;
+  };
+  if (nodeId) {
+    const node = state.nodes.find((n) => n.id === nodeId);
+    if (node) {
+      menu.appendChild(button('打开节点设置', 'select-node', nodeId));
+      if (node.type === 'generate') menu.appendChild(button('运行此节点', 'run-node', nodeId));
+      if (node.type === 'upscale') menu.appendChild(button('高清放大此节点', 'run-node', nodeId));
+      menu.appendChild(button('复制节点', 'duplicate-node', nodeId));
+      menu.appendChild(document.createElement('hr'));
+      menu.appendChild(button('在下方新建 AI 生成节点', 'add-generate'));
+      menu.appendChild(button('在下方新建提示词节点', 'add-prompt'));
+      menu.appendChild(button('在下方新建高清放大节点', 'add-upscale'));
+      menu.appendChild(button('新建 4K 修复工作流', 'upscale-workflow', '4k'));
+      menu.appendChild(button('新建 8K 超分工作流', 'upscale-workflow', '8k'));
+      menu.appendChild(document.createElement('hr'));
+      const del = button('删除节点', 'delete-node', nodeId); del.style.color = '#d9434a'; menu.appendChild(del);
+    }
+  } else {
+    menu.appendChild(button('新建提示词节点', 'add-prompt'));
+    menu.appendChild(button('上传参考图节点', 'add-image'));
+    menu.appendChild(button('新建 AI 生成节点', 'add-generate'));
+    menu.appendChild(button('新建高清放大节点', 'add-upscale'));
+    menu.appendChild(button('新建输出预览', 'add-output'));
+    menu.appendChild(button('新建完整 4K 修复工作流', 'upscale-workflow', '4k'));
+    menu.appendChild(button('新建完整 8K 超分工作流', 'upscale-workflow', '8k'));
+    menu.appendChild(document.createElement('hr'));
+    const reset = button('恢复默认工作流布局', 'reset-flow'); menu.appendChild(reset);
+  }
+  menu.style.left = Math.min(x, window.innerWidth - 210) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - menu.offsetHeight - 12) + 'px';
+  document.body.appendChild(menu);
+  menu.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-menu-action]'); if (!el) return;
+    const action = el.dataset.menuAction;
+    const rect = $('#canvas-viewport');
+    const worldPos = rect ? worldFromScreen(rect, x, y) : { x: 300, y: 200 };
+    if (action === 'select-node') { state.selected = el.dataset.menuId; const node = state.nodes.find((n) => n.id === state.selected); redrawCanvas(); const inspector = $('#inspector'); if (inspector) inspector.innerHTML = inspectorHtml(node); bindInspectorEvents(); }
+    if (action === 'run-node') runNode(el.dataset.menuId);
+    if (action === 'duplicate-node') duplicateNode(el.dataset.menuId);
+    if (action === 'delete-node') deleteNode(el.dataset.menuId);
+    if (action === 'add-prompt') addNode('prompt', worldPos.x, worldPos.y + 24);
+    if (action === 'add-image') addNode('image', worldPos.x, worldPos.y + 24);
+    if (action === 'add-generate') addNode('generate', worldPos.x, worldPos.y + 24);
+    if (action === 'add-upscale') addNode('upscale', worldPos.x, worldPos.y + 24);
+    if (action === 'add-output') addNode('output', worldPos.x, worldPos.y + 24);
+    if (action === 'upscale-workflow') createUpscaleWorkflow(el.dataset.menuId || '4k');
+    if (action === 'reset-flow') resetFlow();
+    closeContextMenu();
+  });
+}
+
+function worldFromScreen(rect, x, y) {
+  return { x: Math.max(20, (x - rect.left - state.camera.x) / state.camera.zoom - 80), y: Math.max(20, (y - rect.top - state.camera.y) / state.camera.zoom) };
+}
+
+function resetFlow() {
+  state.nodes = [
+    { id: 'n-prompt', type: 'prompt', title: '提示词节点', x: 90, y: 300, value: '高奢护肤品主视觉，通透冰蓝色瓶身，柔和晨光，电商广告' },
+    { id: 'n-image', type: 'image', title: '参考图节点', x: 370, y: 590, refs: [] },
+    { id: 'n-generate', type: 'generate', title: 'AI 生成节点', x: 760, y: 330, model: 'gpt-image-2', ratio: '1:1', resolution: '1K', quality: 'auto', status: 'idle', result: null },
+    { id: 'n-output', type: 'output', title: '输出预览', x: 1200, y: 470, result: null }
+  ];
+  state.edges = [
+    { id: 'e1', source: 'n-prompt', target: 'n-generate' },
+    { id: 'e2', source: 'n-image', target: 'n-generate' },
+    { id: 'e3', source: 'n-generate', target: 'n-output' }
+  ];
+  state.selected = 'n-generate'; state.camera = { x: 20, y: 10, zoom: 1 };
+  redrawCanvas(); const inspector = $('#inspector'); if (inspector) inspector.innerHTML = inspectorHtml(state.nodes.find((n) => n.id === state.selected)); bindInspectorEvents();
+}
+
 async function runNode(nodeId) {
-  const gen = state.nodes.find((n) => n.id === nodeId && n.type === 'generate') || state.nodes.find((n) => n.type === 'generate');
-  if (!gen) { toast('请先添加一个 AI 生成节点', 'error'); return; }
+  const gen = state.nodes.find((n) => n.id === nodeId && ['generate', 'upscale', 'background'].includes(n.type)) || state.nodes.find((n) => ['generate', 'upscale'].includes(n.type));
+  if (!gen) { toast('请先选择一个可运行的 AI 节点', 'error'); return; }
   if (!state.token || !state.user) { state.page = 'auth'; location.hash = 'auth'; render(); toast('登录后才能调用云端生成'); return; }
-  const prompts = state.nodes.filter((n) => n.type === 'prompt').map((n) => n.value).filter(Boolean);
+  const upstreamPrompts = state.edges.filter((edge) => edge.target === gen.id).map((edge) => state.nodes.find((n) => n.id === edge.source)).filter((n) => n && n.type === 'prompt');
+  const upstreamImages = state.edges.filter((edge) => edge.target === gen.id).map((edge) => state.nodes.find((n) => n.id === edge.source)).filter((n) => n && n.type === 'image');
+  const prompts = (upstreamPrompts.length ? upstreamPrompts : state.nodes.filter((n) => n.type === 'prompt')).map((n) => n.value).filter(Boolean);
   if (gen.prompt && gen.prompt.trim()) prompts.push(gen.prompt);
   const prompt = [...new Set(prompts)].join('\n');
-  if (!prompt.trim()) { toast('请先在提示词节点输入内容', 'error'); return; }
-  const refs = state.nodes.filter((n) => n.type === 'image').flatMap((n) => (n.refs || []).map((r) => r.id)).filter((id) => id && !id.startsWith('local-'));
-  const output = state.nodes.find((n) => n.type === 'output');
+  const sourceImages = upstreamImages.length ? upstreamImages : state.nodes.filter((n) => n.type === 'image');
+  const refs = sourceImages.flatMap((n) => (n.refs || []).map((r) => r.id)).filter((id) => id && !id.startsWith('local-'));
+  if (gen.type === 'upscale' && !refs.length) { toast('高清放大前请先在上游参考图节点上传图片', 'error'); return; }
+  if (!prompt.trim() && gen.type !== 'upscale') { toast('请先在提示词节点输入内容', 'error'); return; }
+  const outgoingEdges = state.edges.filter((edge) => edge.source === gen.id);
+  const output = outgoingEdges.map((edge) => state.nodes.find((n) => n.id === edge.target)).find((n) => n && n.type === 'output') || state.nodes.find((n) => n.type === 'output');
   gen.status = 'running'; gen.error = '';
   if (output) { output.status = 'running'; output.result = null; }
   redrawCanvas();
   try {
-    const payload = { request_id: 'web-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7), model: gen.model || 'gpt-image-2', prompt, reference_ids: refs, aspect_ratio: gen.ratio || '1:1', resolution: gen.resolution || '1K', quality: gen.quality || 'auto', quantity: 1 };
+    const payload = { request_id: 'web-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7), model: gen.model || 'gpt-image-2', prompt: prompt || gen.prompt || '高清放大，保持主体细节不变', reference_ids: refs, aspect_ratio: gen.ratio === 'auto' ? '1:1' : gen.ratio || '1:1', resolution: gen.resolution || (gen.type === 'upscale' ? '4K' : '1K'), quality: gen.quality || 'auto', quantity: 1 };
     const d = await api('/v1/image/generations', { method: 'POST', body: JSON.stringify(payload) });
     if (d.assetId) {
       const blob = await fetch(`${API_ORIGIN}/v1/image/assets/${encodeURIComponent(d.assetId)}`, { headers: { authorization: 'Bearer ' + state.token } }).then((r) => r.blob());
@@ -441,22 +672,54 @@ async function runNode(nodeId) {
       if (output) { output.result = { preview, assetId: d.assetId }; output.status = 'done'; }
       refreshAccount(); toast('生成完成，结果已写入输出节点', 'ok');
     } else if (d.status === 'failed') {
-      gen.status = 'failed'; gen.error = d.error || '生成失败'; if (output) output.status = 'failed';
-      toast('生成失败：' + (d.error || '服务器暂未配置图像上游'), 'error');
+      if (gen.type === 'upscale' && sourceImages.length) {
+        await localCanvasUpscale(gen, sourceImages, output);
+      } else {
+        gen.status = 'failed'; gen.error = d.error || '生成失败'; if (output) output.status = 'failed';
+        toast('生成失败：' + (d.error || '服务器暂未配置图像上游'), 'error');
+      }
     } else {
       gen.status = 'running'; toast('任务仍在生成，可稍后查看任务历史');
     }
   } catch (err) {
-    gen.status = 'failed'; gen.error = err.message; if (output) output.status = 'failed';
-    toast(err.message, 'error');
+    if (gen.type === 'upscale' && sourceImages.length) { await localCanvasUpscale(gen, sourceImages, output); }
+    else { gen.status = 'failed'; gen.error = err.message; if (output) output.status = 'failed'; toast(err.message, 'error'); }
   }
   redrawCanvas();
   const inspector = $('#inspector'); if (inspector) inspector.innerHTML = inspectorHtml(gen); bindInspectorEvents();
 }
 
+async function localCanvasUpscale(gen, sourceImages, output) {
+  try {
+    const source = sourceImages.find((n) => n.refs && n.refs.length);
+    const ref = source && source.refs[0];
+    if (!ref || !ref.preview) throw new Error('没有可放大的图片');
+    const blob = await fetch(ref.preview).then((r) => r.blob());
+    const bitmap = await createImageBitmap(blob);
+    const factor = gen.tool === 'upscale-8k' ? 4 : 2;
+    const longEdge = Math.max(bitmap.width, bitmap.height);
+    const target = Math.min(4096, longEdge * factor);
+    const scale = target / longEdge;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(2, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(2, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const preview = canvas.toDataURL('image/png');
+    gen.result = { preview, local: true, width: canvas.width, height: canvas.height }; gen.status = 'done'; gen.error = '';
+    if (output) { output.result = { preview, local: true }; output.status = 'done'; }
+    toast('已在本机完成高清放大（' + canvas.width + '×' + canvas.height + '）', 'ok');
+  } catch (e) {
+    gen.status = 'failed'; gen.error = String(e.message || e); if (output) output.status = 'failed';
+    toast('高清放大失败：' + e.message, 'error');
+  }
+}
+
 async function deleteNode(id) {
   if (state.nodes.length <= 2) { toast('画布至少保留一个工作节点'); return; }
   state.nodes = state.nodes.filter((n) => n.id !== id);
+  state.edges = state.edges.filter((e) => e.source !== id && e.target !== id);
   if (state.selected === id) state.selected = (state.nodes.find((n) => n.type === 'generate') || state.nodes[0]).id;
   redrawCanvas(); const inspector = $('#inspector'); if (inspector) inspector.innerHTML = inspectorHtml(state.nodes.find((n) => n.id === state.selected)); bindInspectorEvents();
 }
@@ -468,6 +731,26 @@ function bindWallet() {
       const d = await api('/v1/redeem', { method: 'POST', body: JSON.stringify({ code: data.code }) });
       if (state.user) { state.user.points = d.balance; localStorage.setItem('zh_user', JSON.stringify(state.user)); }
       toast('兑换成功，已到账 ' + d.credited + ' 积分', 'ok'); render();
+    } catch (err) { toast(err.message, 'error'); }
+  };
+}
+
+function bindSettings() {
+  const form = $('#settings-form'); if (!form) return;
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(form));
+    const profile = Object.assign({}, (state.user && state.user.profile) || {});
+    profile.settings = {
+      defaultModel: f.defaultModel, defaultRatio: f.defaultRatio, defaultResolution: f.defaultResolution,
+      defaultQuality: f.defaultQuality, outputPosition: f.outputPosition,
+      autoCheckUpdates: f.autoCheckUpdates === 'on', rememberHistory: f.rememberHistory === 'on', showStatusTips: f.showStatusTips === 'on'
+    };
+    try {
+      const d = await api('/v1/account', { method: 'PUT', body: JSON.stringify({ nickname: f.nickname, profile }) });
+      state.user = d.user; localStorage.setItem('zh_user', JSON.stringify(d.user));
+      state.settings = profile.settings; localStorage.setItem('zh_settings', JSON.stringify(profile.settings));
+      toast('个人设置已保存', 'ok'); render();
     } catch (err) { toast(err.message, 'error'); }
   };
 }
@@ -510,6 +793,7 @@ function bindAdmin() {
 
 function bindDelegated() {
   APP.addEventListener('click', async (e) => {
+    if (e.target.closest('.port')) return;
     const actionEl = e.target.closest('[data-action]');
     if (actionEl) {
       const action = actionEl.dataset.action;
@@ -517,7 +801,9 @@ function bindDelegated() {
       if (action === 'go-studio') { if (!state.user) { state.page = 'auth'; state.mode = 'login'; location.hash = 'auth'; } else { state.page = 'studio'; location.hash = 'studio'; } render(); }
       if (action === 'switch-auth') { state.mode = state.mode === 'login' ? 'register' : 'login'; render(); }
       if (action === 'logout') logout();
+      if (action === 'open-settings') { state.page = 'settings'; location.hash = 'settings'; render(); }
       if (action === 'add-node') addNode(actionEl.dataset.type);
+      if (action === 'upscale-workflow') createUpscaleWorkflow(actionEl.dataset.preset || actionEl.dataset.menuId || '4k');
       if (action === 'select-node') { state.selected = actionEl.dataset.id; const node = state.nodes.find((n) => n.id === state.selected); redrawCanvas(); const inspector = $('#inspector'); if (inspector) inspector.innerHTML = inspectorHtml(node); bindInspectorEvents(); }
       if (action === 'delete-node') deleteNode(actionEl.dataset.id);
       if (action === 'run-node') runNode(actionEl.dataset.id);
@@ -548,4 +834,6 @@ function openPreview(url) {
 
 window.addEventListener('hashchange', () => { state.page = location.hash.slice(1) || 'home'; render(); });
 bindDelegated();
+document.addEventListener('click', closeContextMenu);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeContextMenu(); });
 render();

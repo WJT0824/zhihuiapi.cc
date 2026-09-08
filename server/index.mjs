@@ -44,7 +44,7 @@ const send = (res, status, body, headers = {}) => { res.writeHead(status, { 'con
 const sendRaw = (res, status, data, headers = {}) => { res.writeHead(status, headers); res.end(data); };
 const parseBody = async (req) => { let data = ''; for await (const chunk of req) data += chunk; try { return data ? JSON.parse(data) : {}; } catch { return {}; } };
 const tokenUser = (req, kind = 'access') => { const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''); if (!token) return null; const session = store.sessions[hash(token)]; const id = session && typeof session === 'object' ? (session.kind === kind ? session.userId : null) : session; return store.users.find((u) => u.id === id); };
-const safeUser = (u) => u && ({ id: u.id, nickname: u.nickname, username: u.nickname || u.username || '', email: u.email || '', role: u.role || 'user', isAdmin: u.role === 'admin', points: u.points, credits: u.points, membershipType: u.membershipType || 'registered', membershipExpiresAt: u.membershipExpiresAt || '', isMembershipValid: true, beansBalance: u.beansBalance || 0, beansExpiresAt: u.beansExpiresAt || '', deviceId: u.deviceId || '', createdAt: u.createdAt });
+const safeUser = (u) => u && ({ id: u.id, nickname: u.nickname, username: u.nickname || u.username || '', displayName: u.displayName || u.nickname || '', email: u.email || '', role: u.role || 'user', isAdmin: u.role === 'admin', points: u.points, credits: u.points, profile: u.profile || {}, membershipType: u.membershipType || 'registered', membershipExpiresAt: u.membershipExpiresAt || '', isMembershipValid: true, beansBalance: u.beansBalance || 0, beansExpiresAt: u.beansExpiresAt || '', deviceId: u.deviceId || '', createdAt: u.createdAt });
 const route = (req) => { const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`); return { path: url.pathname, query: url.searchParams }; };
 
 const studioModels = () => {
@@ -249,6 +249,18 @@ async function gateway(req, res, pathName) {
   const user = tokenUser(req);
   if (!user) return fail(401, '请先登录平台账号');
   if (req.method === 'GET' && pathName === '/v1/account') return send(res, 200, { success: true, user: safeUser(user) });
+  if ((req.method === 'PUT' || req.method === 'PATCH') && pathName === '/v1/account') {
+    const nickname = String(body.nickname || body.displayName || '').trim();
+    if (nickname) {
+      if (nickname.length < 2) return fail(400, '昵称至少 2 个字符');
+      if (store.users.some((u) => u.id !== user.id && (u.nickname || '').toLowerCase() === nickname.toLowerCase())) return fail(409, '该昵称已存在');
+      user.nickname = nickname; user.displayName = nickname;
+    }
+    user.profile = Object.assign({}, user.profile || {}, body.profile && typeof body.profile === 'object' ? body.profile : {});
+    if (body.settings && typeof body.settings === 'object') user.profile.settings = Object.assign({}, user.profile.settings || {}, body.settings);
+    await persist();
+    return send(res, 200, { success: true, user: safeUser(user) });
+  }
   if (req.method === 'GET' && pathName === '/v1/image/models') return send(res, 200, { success: true, models: gatewayModels() });
   if (req.method === 'POST' && pathName === '/v1/image/references') {
     if (!files.length) return fail(400, '没有收到参考图');
