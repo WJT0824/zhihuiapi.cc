@@ -64,7 +64,7 @@ function topbar(active) {
     : [['home', '首页', '⌂']];
   const links = (pages.filter(Boolean)).map(([p, name, ic]) => `<a href="#${p}" class="${active === p ? 'active' : ''}"><i>${ic}</i> <span>${name}</span></a>`).join('');
   return `<header class="topbar">
-    <a class="brand" href="#studio"><span class="logo">郅</span><span><b>郅绘</b><small>AI DESIGN WORKSPACE</small></span></a>
+    <a class="brand" href="#studio"><img class="logo" src="/logo.png" alt="郅绘"><span><b>郅绘</b><small>AI DESIGN WORKSPACE</small></span></a>
     <nav class="topnav">${links}</nav>
     <div class="top-right">
       ${state.user ? `<div class="account-chip"><span class="avatar">${esc(userInitial())}</span><span class="name">${esc(state.user.nickname || state.user.username || '')}</span><span class="points-pill">${money(state.user.points ?? state.user.credits)} 积分</span></div><button class="iconbtn" data-action="logout" title="退出登录">↪</button>` : `<button class="btn primary" data-action="go-auth">登录 / 注册</button>`}
@@ -103,7 +103,7 @@ function landing() {
 function authPage() {
   const register = state.mode === 'register';
   return topbar('home') + `<main class="auth-wrap"><div class="auth-card">
-    <a class="brand" href="#home"><span class="logo">郅</span><span><b>郅绘</b><small>AI DESIGN WORKSPACE</small></span></a>
+    <a class="brand" href="#home"><img class="logo" src="/logo.png" alt="郅绘"><span><b>郅绘</b><small>AI DESIGN WORKSPACE</small></span></a>
     <h1>${register ? '创建你的郅绘账号' : '欢迎回来'}</h1>
     <p class="muted">${register ? '注册即赠 100 积分，云端同步昵称与创作记录。' : '登录后继续你的广告创作。'}</p>
     <form id="auth-form">
