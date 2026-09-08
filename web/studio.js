@@ -266,6 +266,7 @@ async function adminPage() {
   return workspaceShell(`<div style="max-width:1100px;margin:0 auto;padding:24px 18px">
     <div class="stats">${Object.entries({ 用户: stats.users, 任务: stats.jobs, 积分总量: stats.credits, 成功任务: stats.succeeded }).map(([k, v]) => `<div class="stat"><b>${v ?? 0}</b><span>${k}</span></div>`).join('')}</div>
     <div class="panel-card"><h3 style="margin-bottom:14px">生成充值码</h3><form id="admin-code-form" style="display:flex;gap:10px;flex-wrap:wrap"><input class="input" name="amount" type="number" min="1" placeholder="单码积分" style="width:130px" value="100"><input class="input" name="count" type="number" min="1" placeholder="数量" style="width:100px" value="1"><button class="btn primary">生成</button><p id="code-result" style="width:100%;font-size:12px;color:#09835e;white-space:pre-wrap"></p></form></div>
+    <div class="panel-card"><h3 style="margin-bottom:14px">AI 图像服务</h3><form id="ai-config-form"><div class="form-grid"><label class="field"><span>服务地址</span><input class="input" name="baseUrl" value="https://tokenflux.cloud/" placeholder="https://tokenflux.cloud/"></label><label class="field"><span>模型</span><input class="input" name="model" value="gpt-image-2" placeholder="gpt-image-2"></label></div><label class="field"><span>平台 API Key</span><input class="input" name="apiKey" type="password" placeholder="留空表示不修改当前密钥"></label><button class="btn primary" style="margin-top:14px">保存 AI 服务配置</button><p id="ai-config-result" style="font-size:12px;color:#09835e"></p></form></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">工作流上传 / 功能同步</h3><form id="workflow-form"><label class="field"><span>工作流 JSON（可粘贴或上传）</span><textarea class="input" name="workflow" style="min-height:150px" placeholder='{"code":"product-hero","name":"产品主视觉","version":1,...}'></textarea></label><input class="input" type="file" id="workflow-file" accept=".json,application/json" style="margin-top:10px"><button class="btn primary" style="margin-top:14px">上传并发布工作流</button><p id="workflow-result" style="font-size:12px;color:#09835e;white-space:pre-wrap"></p></form></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">已发布工作流</h3><table class="table"><thead><tr><th>名称</th><th>代码</th><th>版本</th><th>状态</th><th>更新时间</th></tr></thead><tbody>${wfRows || '<tr><td colspan="5">暂无工作流</td></tr>'}</tbody></table></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">用户</h3><table class="table"><thead><tr><th>昵称</th><th>邮箱</th><th>角色</th><th>积分</th><th>注册时间</th></tr></thead><tbody>${userRows}</tbody></table></div>
@@ -472,6 +473,14 @@ function bindWallet() {
 }
 
 function bindAdmin() {
+  const aiForm = $('#ai-config-form'); if (aiForm) aiForm.onsubmit = async (e) => {
+    e.preventDefault(); const f = Object.fromEntries(new FormData(aiForm));
+    try {
+      const d = await api('/v1/admin/ai-config', { method: 'POST', body: JSON.stringify({ baseUrl: f.baseUrl, apiKey: f.apiKey, model: f.model }) });
+      const box = $('#ai-config-result'); if (box) box.textContent = '已保存：' + d.config.baseUrl + ' · ' + d.config.model + ' · 密钥已配置';
+      toast('AI 图像服务配置已保存', 'ok');
+    } catch (err) { toast(err.message, 'error'); }
+  };
   const codeForm = $('#admin-code-form'); if (codeForm) codeForm.onsubmit = async (e) => {
     e.preventDefault(); const f = Object.fromEntries(new FormData(codeForm));
     try {
