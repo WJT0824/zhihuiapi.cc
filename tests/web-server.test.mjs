@@ -31,6 +31,8 @@ test('health and website are served', async () => {
   const page = await fetch(origin + '/');
   assert.equal(page.status, 200);
   assert.match(await page.text(), /郅绘/);
+  const studioConfig = await request('/api/v1/studio/models');
+  assert.equal(studioConfig.status, 401);
 });
 
 test('auth, task, plugin aliases, and redemption flow', async () => {
@@ -43,6 +45,8 @@ test('auth, task, plugin aliases, and redemption flow', async () => {
   assert.equal(task.body.points, 90);
   const models = await request('/api/v1/studio/models', { headers: auth });
   assert.equal(models.body.models[0].id, 'gpt-image-2');
+  const taskById = await request(`/api/v1/studio/tasks/${task.body.task.id}`, { headers: auth });
+  assert.equal(taskById.body.task.id, task.body.task.id);
 
   const adminLogin = await request('/api/v1/auth/login', { method: 'POST', body: JSON.stringify({ nickname: 'admin', password: 'test-admin-password' }) });
   const created = await request('/api/v1/admin/redemption-codes', { method: 'POST', headers: { authorization: `Bearer ${adminLogin.body.token}` }, body: JSON.stringify({ points: 500 }) });
