@@ -12,6 +12,7 @@ data/
 web-dist/
 icon-preview.png
 .gateway-test-data/
+.ai-config-test-data/
 .plugin-current-src/
 .env.*
 !.env.example
