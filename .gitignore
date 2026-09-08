@@ -13,6 +13,7 @@ web-dist/
 icon-preview.png
 .gateway-test-data/
 .ai-config-test-data/
+.star-core-ref/
 .plugin-current-src/
 .env.*
 !.env.example
