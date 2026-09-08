@@ -316,9 +316,10 @@ async function api(req, res, pathName) {
   if (req.method === 'POST' && pathName === '/api/v1/auth/register') {
     const nickname = String(body.nickname || '').trim(); const password = String(body.password || '');
     if (nickname.length < 2 || password.length < 6) return send(res, 400, { error: '昵称至少 2 个字符，密码至少 6 位。' });
-    if (store.users.some((u) => u.nickname === nickname)) return send(res, 409, { error: '该账号已存在。' });
+    const email = String(body.email || '').trim().toLowerCase();
+    if (store.users.some((u) => u.nickname === nickname || (email && (u.email || '').toLowerCase() === email))) return send(res, 409, { error: '该账号已存在。' });
     const passwordSalt = crypto.randomBytes(16).toString('hex');
-    const user = { id: uid(), nickname, passwordSalt, passwordHash: passwordHash(password, passwordSalt), points: 100, role: 'user', createdAt: now() }; store.users.push(user);
+    const user = { id: uid(), nickname, email, passwordSalt, passwordHash: passwordHash(password, passwordSalt), points: 100, role: 'user', createdAt: now() }; store.users.push(user);
     const token = uid(); store.sessions[hash(token)] = user.id; await persist(); return send(res, 201, { token, user: safeUser(user) });
   }
   if (req.method === 'POST' && pathName === '/api/v1/auth/login') {
