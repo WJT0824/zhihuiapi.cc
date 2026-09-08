@@ -53,3 +53,22 @@ test('auth, task, plugin aliases, and redemption flow', async () => {
   const redeemed = await request('/api/v1/points/redeem', { method: 'POST', headers: auth, body: JSON.stringify({ code: created.body.codes[0].code }) });
   assert.equal(redeemed.body.points, 590);
 });
+
+test('gateway account, reference upload, and job contract', async () => {
+  const email = `gateway-${Date.now()}@example.com`;
+  const registered = await request('/v1/auth/register', { method: 'POST', body: JSON.stringify({ email, nickname: `网关${Date.now()}`, password: 'testpass123' }) });
+  assert.equal(registered.status, 201);
+  assert.equal(registered.body.user.credits, 100);
+  const authHeader = { authorization: `Bearer ${registered.body.access_token}` };
+  const models = await request('/v1/image/models', { headers: authHeader });
+  assert.equal(models.body.models[0].modelId, 'gpt-image-2');
+  const upload = await fetch(origin + '/v1/image/references', { method: 'POST', headers: { authorization: `Bearer ${registered.body.access_token}` }, body: (() => { const form = new FormData(); form.append('files', new Blob([Buffer.from('png-test')], { type: 'image/png' }), 'test.png'); return form; })() });
+  assert.equal(upload.status, 201);
+  const uploadBody = await upload.json();
+  assert.equal(uploadBody.references[0].fileName, 'test.png');
+  const referenceId = uploadBody.references[0].id;
+  const removed = await request(`/v1/image/references?id=${referenceId}`, { method: 'DELETE', headers: authHeader });
+  assert.equal(removed.body.success, true);
+  const account = await request('/v1/account', { headers: authHeader });
+  assert.equal(account.body.user.email, email);
+});
