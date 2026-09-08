@@ -25,14 +25,14 @@ const uid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const passwordHash = (value, salt) => crypto.scryptSync(value, salt, 64).toString('hex');
-const defaultStore = () => ({ users: [], tasks: [], redemptionCodes: [], redemptions: [], ledger: [], sessions: {}, references: [], jobs: [], assets: [], workflows: [] });
+const defaultStore = () => ({ users: [], tasks: [], redemptionCodes: [], redemptions: [], ledger: [], sessions: {}, references: [], jobs: [], assets: [], workflows: [], aiConfig: { baseUrl: '', apiKey: '', model: '' } });
 let store = defaultStore();
 async function load() {
   await mkdir(DATA_DIR, { recursive: true });
   await mkdir(ASSET_DIR, { recursive: true });
   await mkdir(REF_DIR, { recursive: true });
   if (existsSync(DATA_FILE)) { try { store = JSON.parse(await readFile(DATA_FILE, 'utf8')); } catch { store = defaultStore(); } }
-  store.tasks ||= []; store.redemptionCodes ||= []; store.redemptions ||= []; store.ledger ||= []; store.sessions ||= {}; store.references ||= []; store.jobs ||= []; store.assets ||= []; store.workflows ||= [];
+  store.tasks ||= []; store.redemptionCodes ||= []; store.redemptions ||= []; store.ledger ||= []; store.sessions ||= {}; store.references ||= []; store.jobs ||= []; store.assets ||= []; store.workflows ||= []; store.aiConfig ||= { baseUrl: '', apiKey: '', model: '' };
   if (!store.users.length) {
     const passwordSalt = crypto.randomBytes(16).toString('hex');
     store.users.push({ id: uid(), nickname: 'admin', email: '', passwordSalt, passwordHash: passwordHash(ADMIN_KEY, passwordSalt), points: 1000, role: 'admin', createdAt: now() });
@@ -131,7 +131,8 @@ const publicTask = (task) => ({
   completedAt: task.completedAt || undefined,
 });
 
-const gatewayModels = () => [{ id: AI_IMAGE_MODEL, modelId: AI_IMAGE_MODEL, displayName: '平台图像模型', providerName: '郅绘 AI 网关', price: 3, recommended: true, capabilities: { supportsEdit: true, maxReferences: 10, aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'], resolutions: ['1K', '2K', '4K'], qualities: ['auto', 'high', 'medium', 'low'] } }];
+const activeAiConfig = () => ({ baseUrl: AI_BASE_URL || store.aiConfig?.baseUrl || '', apiKey: AI_API_KEY || store.aiConfig?.apiKey || '', model: AI_IMAGE_MODEL || store.aiConfig?.model || 'gpt-image-2' });
+const gatewayModels = () => { const config = activeAiConfig(); return [{ id: config.model, modelId: config.model, displayName: '平台图像模型', providerName: '郅绘 AI 网关', price: 3, recommended: true, capabilities: { supportsEdit: true, maxReferences: 10, aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'], resolutions: ['1K', '2K', '4K'], qualities: ['auto', 'high', 'medium', 'low'] } }]; };
 const gatewayJob = (job) => ({ success: job.status === 'succeeded', jobId: job.id, assetId: job.status === 'succeeded' ? job.id : null, status: job.status, error: job.error || undefined, prompt: job.prompt || '', modelId: job.model || AI_IMAGE_MODEL, createdAt: job.createdAt || '' });
 const issueTokens = (user) => { const accessToken = uid(); const refreshToken = uid(); store.sessions[hash(accessToken)] = { userId: user.id, kind: 'access', createdAt: now() }; store.sessions[hash(refreshToken)] = { userId: user.id, kind: 'refresh', createdAt: now() }; return { access_token: accessToken, refresh_token: refreshToken }; };
 const readRawBody = async (req) => { const chunks = []; let total = 0; for await (const chunk of req) { total += chunk.length; if (total > 60 * 1024 * 1024) throw Object.assign(new Error('请求体过大'), { status: 413 }); chunks.push(Buffer.from(chunk)); } return Buffer.concat(chunks); };
@@ -168,12 +169,13 @@ function outputSize(ratio, resolution) {
   return `${base}x${Math.round(base * f)}`;
 }
 async function runGatewayGeneration(job, user, referenceIds) {
-  if (!AI_BASE_URL || !AI_API_KEY) throw new Error('服务器尚未配置上游图像服务，请联系管理员设置 AI_BASE_URL 与 AI_API_KEY。');
+  const ai = activeAiConfig();
+  if (!ai.baseUrl || !ai.apiKey) throw new Error('服务器尚未配置上游图像服务，请在运营后台设置 AI 服务。');
   const refs = store.references.filter((r) => referenceIds.includes(r.id) && r.userId === user.id);
   const prompt = String(job.prompt || '');
   const size = outputSize(job.aspectRatio, job.resolution);
-  const payload = { model: job.model || AI_IMAGE_MODEL, prompt, size, quality: job.quality || 'auto', n: job.quantity || 1, response_format: 'b64_json' };
-  const headers = { authorization: `Bearer ${AI_API_KEY}` };
+  const payload = { model: job.model || ai.model, prompt, size, quality: job.quality || 'auto', n: job.quantity || 1, response_format: 'b64_json' };
+  const headers = { authorization: `Bearer ${ai.apiKey}` };
   let response;
   if (refs.length) {
     const form = new FormData();
@@ -183,9 +185,9 @@ async function runGatewayGeneration(job, user, referenceIds) {
       const file = await readFile(ref.path);
       form.append('image', new Blob([file], { type: ref.mimeType || 'image/png' }), ref.fileName || `ref-${i}.png`);
     }
-    response = await fetch(`${AI_BASE_URL.replace(/\/+$/, '')}/v1/images/edits`, { method: 'POST', headers, body: form });
+    response = await fetch(`${ai.baseUrl.replace(/\/+$/, '')}/v1/images/edits`, { method: 'POST', headers, body: form });
   } else {
-    response = await fetch(`${AI_BASE_URL.replace(/\/+$/, '')}/v1/images/generations`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(payload) });
+    response = await fetch(`${ai.baseUrl.replace(/\/+$/, '')}/v1/images/generations`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(payload) });
   }
   const json = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(json.error?.message || json.message || `上游图像服务失败 ${response.status}`);
@@ -300,6 +302,19 @@ async function gateway(req, res, pathName) {
   }
   if (req.method === 'GET' && pathName === '/v1/studio/workflows') return send(res, 200, { success: true, workflows: store.workflows || [] });
   if (user.role !== 'admin') return fail(403, '需要管理员权限');
+  if (req.method === 'GET' && pathName === '/v1/admin/ai-config') {
+    const cfg = activeAiConfig();
+    return send(res, 200, { success: true, config: { baseUrl: cfg.baseUrl, model: cfg.model, apiKeyConfigured: Boolean(cfg.apiKey), apiKeyPreview: cfg.apiKey ? `${String(cfg.apiKey).slice(0, 3)}…${String(cfg.apiKey).slice(-3)}` : '' } });
+  }
+  if ((req.method === 'POST' || req.method === 'PUT') && pathName === '/v1/admin/ai-config') {
+    const current = activeAiConfig();
+    const baseUrl = String(body.baseUrl !== undefined ? body.baseUrl : current.baseUrl).trim();
+    const apiKey = String(body.apiKey !== undefined ? body.apiKey : current.apiKey).trim();
+    const model = String(body.model !== undefined ? body.model : current.model).trim() || 'gpt-image-2';
+    if (baseUrl) { try { const u = new URL(baseUrl); if (!/^https?:$/.test(u.protocol)) throw new Error('协议'); } catch { return fail(400, 'AI_BASE_URL 必须是有效的 http/https 地址'); } }
+    store.aiConfig = { baseUrl, apiKey, model }; await persist();
+    return send(res, 200, { success: true, config: { baseUrl, model, apiKeyConfigured: Boolean(apiKey), apiKeyPreview: apiKey ? `${apiKey.slice(0, 3)}…${apiKey.slice(-3)}` : '' } });
+  }
   if (req.method === 'POST' && pathName === '/v1/admin/redeem-codes') { const points = Math.max(1, Math.min(100000, Number(body.amount || body.points) || 10)); const count = Math.max(1, Math.min(100, Number(body.count) || 1)); const codes = []; for (let i = 0; i < count; i += 1) { const raw = `ZH-${crypto.randomBytes(5).toString('hex').toUpperCase()}`; codes.push(raw); store.redemptionCodes.push({ id: uid(), code: raw, points, createdAt: now() }); } await persist(); return send(res, 201, { success: true, codes, amount: points }); }
   if (req.method === 'GET' && pathName === '/v1/admin/dashboard') {
     const users = store.users.slice(-200); const jobs = store.jobs.slice(-100).reverse(); const workflows = store.workflows || [];
@@ -311,7 +326,7 @@ async function gateway(req, res, pathName) {
 
 async function api(req, res, pathName) {
   if (req.method === 'OPTIONS') return send(res, 204, null);
-  if (req.method === 'GET' && pathName === '/api/health') return send(res, 200, { ok: true, service: 'zhihui-web', time: now(), apiOrigin: PUBLIC_API_ORIGIN || '', aiEnabled: Boolean(AI_BASE_URL && AI_API_KEY) });
+  if (req.method === 'GET' && pathName === '/api/health') return send(res, 200, { ok: true, service: 'zhihui-web', time: now(), apiOrigin: PUBLIC_API_ORIGIN || '', aiEnabled: Boolean(activeAiConfig().apiKey) });
   const body = await parseBody(req);
   if (req.method === 'POST' && pathName === '/api/v1/auth/register') {
     const nickname = String(body.nickname || '').trim(); const password = String(body.password || '');
