@@ -167,6 +167,7 @@ export function InfiniteCanvas({
   onRenameAsset,
 }: InfiniteCanvasProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
+  const marqueeRectRef = useRef<{ x: number; y: number; width: number; height: number }>();
   const [contextMenu, setContextMenu] = useState<{ screenX: number; screenY: number; worldX: number; worldY: number; connection?: ConnectionDraft }>();
   const [contextSubmenu, setContextSubmenu] = useState<string>();
   const [imageMenu, setImageMenu] = useState<{ screenX: number; screenY: number; worldX: number; worldY: number; asset: AssetRecord }>();
@@ -174,9 +175,25 @@ export function InfiniteCanvas({
   const [viewer, setViewer] = useState<ImageViewerState>();
   const [imageDimensions, setImageDimensions] = useState<Record<string, ImageDimension>>({});
   const [viewerDrag, setViewerDrag] = useState<{ startX: number; startY: number; originX: number; originY: number }>();
+  const [multiSelectedIds, setMultiSelectedIds] = useState<string[]>([]);
+  const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; width: number; height: number }>();
   const [drag, setDrag] = useState<
     | { mode: "pan"; startX: number; startY: number; originX: number; originY: number }
-    | { mode: "node"; nodeId: string; startX: number; startY: number; originX: number; originY: number }
+    | {
+        mode: "marquee";
+        additive: boolean;
+        startX: number;
+        startY: number;
+        originX: number;
+        originY: number;
+      }
+    | {
+        mode: "nodes";
+        nodeIds: string[];
+        origins: Record<string, { x: number; y: number }>;
+        startX: number;
+        startY: number;
+      }
     | {
         mode: "resize";
         nodeId: string;
@@ -251,29 +268,123 @@ export function InfiniteCanvas({
     });
   }
 
-  function deleteNode(nodeId: string) {
+  function deleteManyNodes(nodeIds: string[]) {
+    if (!nodeIds.length) return;
+    const ids = new Set(nodeIds);
     onChange({
       ...project,
       graph: {
         ...project.graph,
-        nodes: project.graph.nodes.filter((node) => node.id !== nodeId),
-        edges: project.graph.edges.filter((edge) => edge.sourceNode !== nodeId && edge.targetNode !== nodeId),
+        nodes: project.graph.nodes.filter((node) => !ids.has(node.id)),
+        edges: project.graph.edges.filter((edge) => !ids.has(edge.sourceNode) && !ids.has(edge.targetNode)),
       },
     });
+    setMultiSelectedIds([]);
     onSelect(undefined);
+  }
+
+  function uniqueIds(values: string[]) {
+    return [...new Set(values.filter(Boolean))];
+  }
+
+  function toggleNodeInMultiSelection(nodeId: string) {
+    setMultiSelectedIds((current) => {
+      const next = current.includes(nodeId) ? current.filter((id) => id !== nodeId) : [...current, nodeId];
+      onSelect(next.length ? next[next.length - 1] : undefined);
+      return next;
+    });
+  }
+
+  function clearMultiSelection() {
+    setMultiSelectedIds([]);
+    onSelect(undefined);
+  }
+
+  function groupMultiSelectedNodes() {
+    const selected = project.graph.nodes.filter((node) => multiSelectedIds.includes(node.id));
+    if (selected.length < 2) return;
+    const groupId = nanoid();
+    const selectedIds = new Set(selected.map((node) => node.id));
+    onChange({
+      ...project,
+      graph: {
+        ...project.graph,
+        nodes: project.graph.nodes.map((node) => (selectedIds.has(node.id) ? { ...node, groupId } : node)),
+      },
+    });
+    setMultiSelectedIds(selected.map((node) => node.id));
+  }
+
+  function ungroupFromSelection() {
+    const selected = project.graph.nodes.filter((node) => multiSelectedIds.includes(node.id));
+    const groupIds = new Set(selected.map((node) => node.groupId).filter((value): value is string => Boolean(value)));
+    if (!groupIds.size) return;
+    onChange({
+      ...project,
+      graph: {
+        ...project.graph,
+        nodes: project.graph.nodes.map((node) => (node.groupId && groupIds.has(node.groupId) ? { ...node, groupId: undefined } : node)),
+      },
+    });
+  }
+
+  function startNodeDrag(event: PointerEvent<HTMLElement>, node: CanvasNode) {
+    const target = event.target as HTMLElement;
+    if (event.button === 1) {
+      event.preventDefault();
+      event.stopPropagation();
+      setContextMenu(undefined);
+      setDrag({
+        mode: "pan",
+        startX: event.clientX,
+        startY: event.clientY,
+        originX: project.graph.viewport.x,
+        originY: project.graph.viewport.y,
+      });
+      return;
+    }
+    if (event.button !== 0 || node.locked || target.closest(".node-control, .node-actions, .node-port, .node-resize-handle")) return;
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      toggleNodeInMultiSelection(node.id);
+      return;
+    }
+    const groupIds = node.groupId
+      ? project.graph.nodes.filter((item) => item.groupId === node.groupId).map((item) => item.id)
+      : [];
+    const moveIds = uniqueIds([...multiSelectedIds, node.id, ...groupIds]);
+    const origins: Record<string, { x: number; y: number }> = {};
+    for (const item of project.graph.nodes) {
+      if (moveIds.includes(item.id)) origins[item.id] = { x: item.position.x, y: item.position.y };
+    }
+    if (node.groupId) {
+      setMultiSelectedIds(moveIds.filter((id) => project.graph.nodes.find((item) => item.id === id)?.groupId === node.groupId));
+    } else if (!multiSelectedIds.includes(node.id)) {
+      setMultiSelectedIds([node.id]);
+    }
+    onSelect(node.id);
+    setDrag({
+      mode: "nodes",
+      nodeIds: Object.keys(origins),
+      origins,
+      startX: event.clientX,
+      startY: event.clientY,
+    });
   }
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!selectedNodeId || !["Delete", "Backspace"].includes(event.key)) return;
+      const ids = uniqueIds([...(multiSelectedIds.length ? multiSelectedIds : selectedNodeId ? [selectedNodeId] : [])]);
+      if (!ids.length || !["Delete", "Backspace"].includes(event.key)) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       event.preventDefault();
-      deleteNode(selectedNodeId);
+      deleteManyNodes(ids);
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedNodeId, project]);
+  }, [selectedNodeId, multiSelectedIds, project]);
 
   function createEdge(targetNode: string, targetPort: string) {
     if (!connecting || connecting.sourceNode === targetNode) {
@@ -431,14 +542,26 @@ export function InfiniteCanvas({
         x: drag.originX + event.clientX - drag.startX,
         y: drag.originY + event.clientY - drag.startY,
       });
-    } else if (drag.mode === "node") {
-      const node = project.graph.nodes.find((item) => item.id === drag.nodeId);
-      if (!node || node.locked) return;
-      updateNode({
-        ...node,
-        position: {
-          x: drag.originX + (event.clientX - drag.startX) / project.graph.viewport.zoom,
-          y: drag.originY + (event.clientY - drag.startY) / project.graph.viewport.zoom,
+    } else if (drag.mode === "marquee") {
+      const current = toWorld(event.clientX, event.clientY);
+      const x = Math.min(drag.originX, current.worldX);
+      const y = Math.min(drag.originY, current.worldY);
+      const width = Math.abs(current.worldX - drag.originX);
+      const height = Math.abs(current.worldY - drag.originY);
+      const rect = { x, y, width, height };
+      marqueeRectRef.current = rect;
+      setMarqueeRect(rect);
+    } else if (drag.mode === "nodes") {
+      const deltaX = (event.clientX - drag.startX) / project.graph.viewport.zoom;
+      const deltaY = (event.clientY - drag.startY) / project.graph.viewport.zoom;
+      onChange({
+        ...project,
+        graph: {
+          ...project.graph,
+          nodes: project.graph.nodes.map((node) => {
+            const origin = drag.origins[node.id];
+            return origin && !node.locked ? { ...node, position: { x: origin.x + deltaX, y: origin.y + deltaY } } : node;
+          }),
         },
       });
     } else {
@@ -463,7 +586,31 @@ export function InfiniteCanvas({
       });
     }
     };
-    const handlePointerUp = () => setDrag(undefined);
+    const handlePointerUp = (event: globalThis.PointerEvent) => {
+      if (drag.mode === "marquee") {
+        const rect = marqueeRectRef.current;
+        if (!rect || (rect.width < 3 && rect.height < 3)) {
+          if (!drag.additive) clearMultiSelection();
+        } else {
+          const hitIds = project.graph.nodes
+            .filter((node) => {
+              const size = getVisualNodeSize(node);
+              const left = node.position.x;
+              const top = node.position.y;
+              return left < rect.x + rect.width && left + size.width > rect.x && top < rect.y + rect.height && top + size.height > rect.y;
+            })
+            .map((node) => node.id);
+          setMultiSelectedIds((current) => {
+            const next = drag.additive ? uniqueIds([...current, ...hitIds]) : hitIds;
+            onSelect(next[0]);
+            return next;
+          });
+        }
+      }
+      marqueeRectRef.current = undefined;
+      setMarqueeRect(undefined);
+      setDrag(undefined);
+    };
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
     return () => {
@@ -503,11 +650,15 @@ export function InfiniteCanvas({
     setViewerDrag(undefined);
     setViewer({ asset, scale: 1, x: 0, y: 0 });
   };
+  const selectionNodes = project.graph.nodes.filter((node) => multiSelectedIds.includes(node.id));
+  const activeGroups = new Set(selectionNodes.map((node) => node.groupId).filter((value): value is string => Boolean(value)));
+  const allInOneGroup = activeGroups.size === 1 && selectionNodes.length >= 2 && selectionNodes.every((node) => node.groupId === [...activeGroups][0]);
+  const showSelectionActions = selectionNodes.length >= 2 || activeGroups.size > 0;
 
   return (
     <main
       ref={canvasRef}
-      className={`canvas-viewport canvas-bg-${project.graph.background ?? "gradient"}`}
+      className={`canvas-viewport canvas-bg-${project.graph.background ?? "gradient"} ${drag?.mode === "marquee" ? "canvas-marquee-active" : ""}`}
       onContextMenu={(event) => {
         event.preventDefault();
         setImageMenu(undefined);
@@ -536,23 +687,27 @@ export function InfiniteCanvas({
           });
           return;
         }
-        if (event.target !== event.currentTarget) return;
-        onSelect(undefined);
+        const target = event.target as HTMLElement;
+        if (![event.currentTarget, ".canvas-grid", ".canvas-world", ".edge-layer"].some((selector) => (typeof selector === "string" ? target.closest(selector) : selector === target))) return;
+        const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+        const point = toWorld(event.clientX, event.clientY);
+        marqueeRectRef.current = { x: point.worldX, y: point.worldY, width: 0, height: 0 };
+        setMarqueeRect({ x: point.worldX, y: point.worldY, width: 0, height: 0 });
         setDrag({
-          mode: "pan",
+          mode: "marquee",
+          additive,
           startX: event.clientX,
           startY: event.clientY,
-          originX: project.graph.viewport.x,
-          originY: project.graph.viewport.y,
+          originX: point.worldX,
+          originY: point.worldY,
         });
       }}
       onPointerMove={handleCanvasPointerMove}
-      onPointerUp={(event) => {
-        setDrag(undefined);
-        completeEdgeAtPoint(event.clientX, event.clientY);
-      }}
+      onPointerUp={(event) => completeEdgeAtPoint(event.clientX, event.clientY)}
       onPointerLeave={() => {
         setDrag(undefined);
+        setMarqueeRect(undefined);
+        marqueeRectRef.current = undefined;
         setConnecting(undefined);
       }}
     >
@@ -563,6 +718,12 @@ export function InfiniteCanvas({
           transform: `translate(${project.graph.viewport.x}px, ${project.graph.viewport.y}px) scale(${project.graph.viewport.zoom})`,
         }}
       >
+        {marqueeRect && (
+          <div
+            className="canvas-marquee"
+            style={{ left: marqueeRect.x, top: marqueeRect.y, width: marqueeRect.width, height: marqueeRect.height }}
+          />
+        )}
         <svg className="edge-layer">
           {project.graph.edges.map((edge) => {
             const source = project.graph.nodes.find((node) => node.id === edge.sourceNode);
@@ -625,7 +786,7 @@ export function InfiniteCanvas({
                 progressStartedAt={Number(node.params.progressStartedAt ?? 0)}
                 waitingForResult={Boolean(imageFlow?.running || ((node.type === "preview" || node.type === "compare") && sourceImages.length && !resultAsset))}
                 selected={node.id === selectedNodeId}
-                onSelect={() => onSelect(node.id)}
+                multiSelected={multiSelectedIds.includes(node.id)}
                 onRun={() => onRunNode(node)}
                 onUpdate={updateNode}
                 onImportImage={() => onImportImageIntoNode(node.id)}
@@ -649,34 +810,7 @@ export function InfiniteCanvas({
                   event.stopPropagation();
                   createEdge(node.id, targetPort);
                 }}
-                onPointerDown={(event) => {
-                  const target = event.target as HTMLElement;
-                if (event.button === 1) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setContextMenu(undefined);
-                  setDrag({
-                    mode: "pan",
-                    startX: event.clientX,
-                    startY: event.clientY,
-                    originX: project.graph.viewport.x,
-                    originY: project.graph.viewport.y,
-                  });
-                  return;
-                }
-                if (target.closest(".node-control, .node-actions, .node-port, .node-resize-handle")) return;
-                event.stopPropagation();
-                event.currentTarget.setPointerCapture(event.pointerId);
-                onSelect(node.id);
-                  setDrag({
-                    mode: "node",
-                    nodeId: node.id,
-                    startX: event.clientX,
-                    startY: event.clientY,
-                    originX: node.position.x,
-                    originY: node.position.y,
-                  });
-                }}
+                onPointerDown={(event) => startNodeDrag(event, node)}
                 onStartResize={(direction, event) => {
                   event.stopPropagation();
                   const visualSize = getVisualNodeSize(node);
@@ -830,6 +964,32 @@ export function InfiniteCanvas({
           </button>
         </div>
       )}
+      {showSelectionActions && (
+        <div
+          className="canvas-selection-toolbar"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <span className="selection-count">已选 {selectionNodes.length} 个节点</span>
+          {selectionNodes.length >= 2 && !allInOneGroup && (
+            <button onClick={() => groupMultiSelectedNodes()}>
+              <Layers3 size={14} />
+              组合节点
+            </button>
+          )}
+          {activeGroups.size > 0 && (
+            <button onClick={() => ungroupFromSelection()}>
+              <Layers3 size={14} />
+              取消组合
+            </button>
+          )}
+          <button onClick={() => deleteManyNodes(selectionNodes.map((node) => node.id))}>
+            <Trash2 size={14} />
+            删除选中
+          </button>
+          <button onClick={() => clearMultiSelection()}>取消选择</button>
+        </div>
+      )}
       {viewer && (
         <ImageViewer
           viewer={viewer}
@@ -877,7 +1037,7 @@ function NodeCard({
   progressStartedAt,
   waitingForResult,
   selected,
-  onSelect,
+  multiSelected,
   onRun,
   onUpdate,
   onImportImage,
@@ -904,7 +1064,7 @@ function NodeCard({
   progressStartedAt?: number;
   waitingForResult?: boolean;
   selected: boolean;
-  onSelect: () => void;
+  multiSelected?: boolean;
   onRun: () => void;
   onUpdate: (node: CanvasNode) => void;
   onImportImage: () => void;
@@ -972,7 +1132,7 @@ function NodeCard({
 
   return (
     <article
-      className={`canvas-node ${selected ? "selected" : ""} ${node.status}`}
+      className={`canvas-node ${selected ? "selected" : ""} ${multiSelected ? "multi-selected" : ""} ${node.groupId ? "grouped" : ""} ${node.status}`}
       style={{
         left: node.position.x,
         top: node.position.y,
@@ -980,10 +1140,6 @@ function NodeCard({
         height: visualSize.height,
       }}
       onPointerDown={onPointerDown}
-      onClick={(event) => {
-        event.stopPropagation();
-        onSelect();
-      }}
     >
       {inputPorts.map((port, index) => (
         <button
