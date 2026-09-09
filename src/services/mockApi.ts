@@ -134,10 +134,19 @@ export const mockApi: ZhihuiApi = {
   },
   ai: {
     async listModels() {
+      try {
+        const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
+        const token = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
+        const response = await fetch(`${apiOrigin}/v1/image/models`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+        if (response.ok) {
+          const payload = await response.json();
+          const modelItems = (payload.models || []) as Array<{ id?: string; modelId?: string; displayName?: string; name?: string }>;
+          const models = modelItems.map((item) => ({ id: item.modelId || item.id || "gpt-image-2", name: item.displayName || item.name || item.id || "GPT Image 2", tags: ["image-editing"] }));
+          if (models.length) return models;
+        }
+      } catch {}
       return [
         { id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] },
-        { id: "GPT-5.5", name: "GPT-5.5", tags: ["reasoning"] },
-        { id: "GPT-5.4", name: "GPT-5.4", tags: ["reasoning"] },
         { id: "flux-kontext-apps/restore-image", name: "restore-image", tags: ["image-editing"] },
       ];
     },

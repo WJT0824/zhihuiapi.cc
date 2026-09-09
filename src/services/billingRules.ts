@@ -6,7 +6,7 @@ export function pointsForAmount(amountCny: number) {
 }
 
 export function costForResolution(resolution: unknown) {
-  return String(resolution || "1K") === "4K" ? 8 : 4;
+  return String(resolution || "1K") === "4K" ? 8 : 3;
 }
 
 export function generationCost(input: { resolution?: unknown; n?: unknown }) {

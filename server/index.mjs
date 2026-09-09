@@ -136,6 +136,26 @@ const publicTask = (task) => ({
 
 const activeAiConfig = () => ({ baseUrl: AI_BASE_URL || store.aiConfig?.baseUrl || '', apiKey: AI_API_KEY || store.aiConfig?.apiKey || '', model: AI_IMAGE_MODEL || store.aiConfig?.model || 'gpt-image-2' });
 const gatewayModels = () => { const config = activeAiConfig(); return [{ id: config.model, modelId: config.model, displayName: config.model === 'gpt-image-2' ? 'GPT Image 2' : '平台图像模型', providerName: '郅绘 AI 网关', price: 3, recommended: true, capabilities: { supportsEdit: true, maxReferences: 10, aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'], resolutions: ['1K', '2K', '4K'], qualities: ['auto', 'high', 'medium', 'low'] } }]; };
+const liveGatewayModels = async () => {
+  const config = activeAiConfig();
+  if (!config.baseUrl || !config.apiKey) return gatewayModels();
+  try {
+    const response = await fetch(`${config.baseUrl.replace(/\/+$/, '')}/v1/models`, { headers: { authorization: `Bearer ${config.apiKey}` } });
+    if (!response.ok) return gatewayModels();
+    const payload = await response.json();
+    const source = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
+    const models = source
+      .filter((item) => {
+        const endpoints = item.supported_endpoint_types || [];
+        const id = String(item.id || '');
+        return !endpoints.length || endpoints.includes('image-generation') || endpoints.includes('images') || endpoints.includes('image') || /image|img/i.test(id);
+      })
+      .map((item) => ({ id: String(item.id || ''), modelId: String(item.id || ''), displayName: item.name || item.displayName || String(item.id || ''), providerName: item.owned_by || '郅绘 AI 网关', price: 3, recommended: String(item.id || '').includes(config.model) }));
+    return models.length ? models : gatewayModels();
+  } catch {
+    return gatewayModels();
+  }
+};
 const gatewayJob = (job) => ({ success: job.status === 'succeeded', jobId: job.id, assetId: job.status === 'succeeded' ? job.id : null, status: job.status, error: job.error || undefined, prompt: job.prompt || '', modelId: job.model || AI_IMAGE_MODEL, createdAt: job.createdAt || '' });
 const issueTokens = (user) => { const accessToken = uid(); const refreshToken = uid(); store.sessions[hash(accessToken)] = { userId: user.id, kind: 'access', createdAt: now() }; store.sessions[hash(refreshToken)] = { userId: user.id, kind: 'refresh', createdAt: now() }; return { access_token: accessToken, refresh_token: refreshToken }; };
 const readRawBody = async (req) => { const chunks = []; let total = 0; for await (const chunk of req) { total += chunk.length; if (total > 60 * 1024 * 1024) throw Object.assign(new Error('请求体过大'), { status: 413 }); chunks.push(Buffer.from(chunk)); } return Buffer.concat(chunks); };
@@ -264,7 +284,7 @@ async function gateway(req, res, pathName) {
     await persist();
     return send(res, 200, { success: true, user: safeUser(user) });
   }
-  if (req.method === 'GET' && pathName === '/v1/image/models') return send(res, 200, { success: true, models: gatewayModels() });
+  if (req.method === 'GET' && pathName === '/v1/image/models') return send(res, 200, { success: true, models: await liveGatewayModels() });
   if (req.method === 'POST' && pathName === '/v1/image/references') {
     if (!files.length) return fail(400, '没有收到参考图');
     const result = [];
