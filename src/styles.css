@@ -2306,3 +2306,31 @@ textarea:focus {
   background:#4f5dfa;
   color:#fff;
 }
+.node-connected-prompt {
+  display:flex;
+  align-items:flex-start;
+  gap:8px;
+  min-height:0;
+  max-height:54px;
+  overflow:hidden;
+  border:1px solid #d9e1f1;
+  border-radius:8px;
+  padding:6px 8px;
+  background:#f8faff;
+  font-size:12px;
+}
+.node-connected-prompt span {
+  flex:0 0 auto;
+  font-weight:800;
+  color:#4f5dfa;
+}
+.node-connected-prompt p {
+  flex:1 1 auto;
+  margin:0;
+  color:#4a5670;
+  line-height:1.45;
+  display:-webkit-box;
+  -webkit-line-clamp:2;
+  -webkit-box-orient:vertical;
+  overflow:hidden;
+}

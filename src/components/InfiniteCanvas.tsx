@@ -268,7 +268,7 @@ export function InfiniteCanvas({
         ...project.graph,
         nodes: project.graph.nodes.map((item) => {
           if (item.id === node.id) return node;
-          if (syncedText !== undefined && item.type === "image" && syncTargets.has(item.id)) {
+          if (syncedText !== undefined && item.type === "ai-generate" && syncTargets.has(item.id)) {
             return { ...item, params: { ...item.params, prompt: syncedText } };
           }
           return item;
@@ -478,7 +478,7 @@ export function InfiniteCanvas({
     );
     const sourceNode = project.graph.nodes.find((node) => node.id === connecting.sourceNode);
     const connectedTarget = project.graph.nodes.find((node) => node.id === targetNode);
-    const shouldSyncPrompt = sourceNode?.type === "prompt" && connectedTarget?.type === "image";
+    const shouldSyncPrompt = sourceNode?.type === "prompt" && connectedTarget?.type === "ai-generate";
     const syncedPrompt = shouldSyncPrompt ? String(sourceNode?.params.prompt ?? "") : undefined;
     onChange({
       ...project,
@@ -1174,7 +1174,7 @@ function NodeCard({
   const isPromptNode = node.type === "prompt";
   const isViewOnlyNode = node.type === "preview" || node.type === "compare";
   const isUploadNode = node.type === "image";
-  const showFloatingControls = selected && !isViewOnlyNode && !isPromptNode;
+  const showFloatingControls = selected && !isViewOnlyNode && !isPromptNode && !isUploadNode;
   const connectedReferenceAssets = (referenceAssets ?? []).filter((asset) => asset.type === "image");
 
   const setParam = (key: string, value: unknown) => onUpdate({ ...node, params: { ...node.params, [key]: value } });
@@ -1285,6 +1285,22 @@ function NodeCard({
         <PreviewPanel nodeType={node.type} resultAsset={resultAsset} resultAssets={resultAssets} overviewAsset={overviewAsset} sourceAsset={sourceAsset} progress={progress} progressStartedAt={progressStartedAt} running={node.status === "running"} waitingForResult={waitingForResult} onOpenImage={onOpenImage} onImageLoad={onImageLoad} onImageContextMenu={onImageContextMenu} />
       ) : (
         <PreviewPanel nodeType={node.type} resultAsset={resultAsset} resultAssets={resultAssets} overviewAsset={overviewAsset} sourceAsset={sourceAsset} progress={progress} progressStartedAt={progressStartedAt} running={node.status === "running"} waitingForResult={waitingForResult} onOpenImage={onOpenImage} onImageLoad={onImageLoad} onImageContextMenu={onImageContextMenu} />
+      )}
+
+      {node.type === "ai-generate" && !showFloatingControls && connectedReferenceAssets.length > 0 && (
+        <ReferenceImageStrip
+          assets={connectedReferenceAssets}
+          onOpenImage={onOpenImage}
+          onImageContextMenu={onImageContextMenu}
+          onRenameAsset={onRenameAsset}
+          onPointerDown={stopControlPointer}
+        />
+      )}
+      {node.type === "ai-generate" && !showFloatingControls && prompt.trim() && (
+        <div className="node-connected-prompt node-control" onPointerDown={stopControlPointer}>
+          <span>已同步文本</span>
+          <p title={prompt}>{prompt}</p>
+        </div>
       )}
 
       {showFloatingControls && (
