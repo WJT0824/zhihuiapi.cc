@@ -1042,6 +1042,11 @@ button:disabled {
   background: #10151d;
   color: #eef2f6;
 }
+.workbench-prompt.prompt-only {
+  flex: 1 1 auto;
+  height: auto;
+  resize: vertical;
+}
 
 .node-mini-controls,
 .workbench-controls {
