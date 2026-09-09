@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
   CircleHelp,
@@ -58,11 +58,11 @@ const workflowDefinitions: WorkflowDefinition[] = [
     title: "商品图精修流程",
     description: "上传原图，按提示词精准编辑，自动输出预览和原图对比。",
     nodes: [
-      { key: "image", type: "image", title: "图像节点", x: 0, y: 20 },
+      { key: "image", type: "image", title: "参考图节点", x: 0, y: 20 },
       {
         key: "prompt",
         type: "prompt",
-        title: "文本节点",
+        title: "提示词节点",
         x: 0,
         y: 360,
         params: {
@@ -71,9 +71,9 @@ const workflowDefinitions: WorkflowDefinition[] = [
           size: "1024x1024",
         },
       },
-      { key: "edit", type: "background", title: "图像编辑节点", x: 520, y: 130, params: { ratio: "1:1", size: "1024x1024" } },
-      { key: "preview", type: "preview", title: "图像预览节点", x: 1040, y: 50 },
-      { key: "compare", type: "compare", title: "图像对比节点", x: 1040, y: 390 },
+      { key: "edit", type: "background", title: "编辑节点", x: 520, y: 130, params: { ratio: "1:1", size: "1024x1024" } },
+      { key: "preview", type: "preview", title: "输出节点", x: 1040, y: 50 },
+      { key: "compare", type: "compare", title: "对比节点", x: 1040, y: 390 },
     ],
     edges: [
       { from: "image", sourcePort: "image", to: "edit", targetPort: "image" },
@@ -88,17 +88,17 @@ const workflowDefinitions: WorkflowDefinition[] = [
     title: "电商海报流程",
     description: "商品参考图加卖点提示词，生成主图海报并进入预览。",
     nodes: [
-      { key: "image", type: "image", title: "图像节点", x: 0, y: 60 },
+      { key: "image", type: "image", title: "参考图节点", x: 0, y: 60 },
       {
         key: "prompt",
         type: "prompt",
-        title: "文本节点",
+        title: "提示词节点",
         x: 0,
         y: 400,
         params: { prompt: "基于上传商品图生成高转化电商主图海报，主体突出，卖点清晰，高级商业摄影质感。", ratio: "1:1", size: "1024x1024" },
       },
-      { key: "generate", type: "ai-generate", title: "图像生成节点", x: 520, y: 170, params: { ratio: "1:1", size: "1024x1024" } },
-      { key: "preview", type: "preview", title: "图像预览节点", x: 1040, y: 170 },
+      { key: "generate", type: "ai-generate", title: "AI 生成节点", x: 520, y: 170, params: { ratio: "1:1", size: "1024x1024" } },
+      { key: "preview", type: "preview", title: "输出节点", x: 1040, y: 170 },
     ],
     edges: [
       { from: "image", sourcePort: "image", to: "generate", targetPort: "image" },
@@ -111,17 +111,17 @@ const workflowDefinitions: WorkflowDefinition[] = [
     title: "商品白底图流程",
     description: "按平台规范提取主体，保留真实细节，输出前后对比。",
     nodes: [
-      { key: "image", type: "image", title: "图像节点", x: 0, y: 40 },
+      { key: "image", type: "image", title: "参考图节点", x: 0, y: 40 },
       {
         key: "prompt",
         type: "prompt",
-        title: "文本节点",
+        title: "提示词节点",
         x: 0,
         y: 370,
         params: { prompt: "严格保留上传商品主体，去除复杂背景，生成干净白底图，边缘自然，材质真实，不改变商品结构。", ratio: "1:1", size: "1024x1024" },
       },
       { key: "edit", type: "background", title: "白底处理节点", x: 520, y: 140, params: { ratio: "1:1", size: "1024x1024" } },
-      { key: "compare", type: "compare", title: "图像对比节点", x: 1040, y: 140 },
+      { key: "compare", type: "compare", title: "对比节点", x: 1040, y: 140 },
     ],
     edges: [
       { from: "image", sourcePort: "image", to: "edit", targetPort: "image" },
@@ -138,17 +138,63 @@ const workflowDefinitions: WorkflowDefinition[] = [
       {
         key: "prompt",
         type: "prompt",
-        title: "文本节点",
+        title: "提示词节点",
         x: 0,
         y: 80,
         params: { prompt: "生成一张高级商业广告主视觉 KV，主体明确，标题区域清晰，适合线下海报和展会物料延展。", ratio: "16:9", size: "1920x1080" },
       },
-      { key: "generate", type: "ai-generate", title: "图像生成节点", x: 520, y: 80, params: { ratio: "16:9", size: "1920x1080" } },
-      { key: "preview", type: "preview", title: "图像预览节点", x: 1040, y: 80 },
+      { key: "generate", type: "ai-generate", title: "AI 生成节点", x: 520, y: 80, params: { ratio: "16:9", size: "1920x1080" } },
+      { key: "preview", type: "preview", title: "输出节点", x: 1040, y: 80 },
     ],
     edges: [
       { from: "prompt", sourcePort: "prompt", to: "generate", targetPort: "prompt" },
       { from: "generate", sourcePort: "image", to: "preview", targetPort: "image" },
+    ],
+  },
+  {
+    id: "hd-4k-repair",
+    title: "高清修复流程",
+    description: "上传原图，按 4K 高清修复提示词自动连接放大节点并输出结果。",
+    nodes: [
+      { key: "image", type: "image", title: "参考图节点", x: 0, y: 30, params: {} },
+      {
+        key: "prompt",
+        type: "prompt",
+        title: "提示词节点",
+        x: 0,
+        y: 360,
+        params: { prompt: "高质量修复图片，恢复细节、纹理和清晰度，保持主体与构图不变", ratio: "auto", size: "2048x2048" },
+      },
+      { key: "upscale", type: "upscale", title: "高清修复节点", x: 520, y: 100, params: { tool: "restore-4k", factor: 2, resolution: "4K", ratio: "auto" } },
+      { key: "preview", type: "preview", title: "输出节点", x: 1040, y: 100 },
+    ],
+    edges: [
+      { from: "image", sourcePort: "image", to: "upscale", targetPort: "image" },
+      { from: "prompt", sourcePort: "prompt", to: "upscale", targetPort: "prompt" },
+      { from: "upscale", sourcePort: "image", to: "preview", targetPort: "image" },
+    ],
+  },
+  {
+    id: "hd-8k-upscale",
+    title: "超清放大流程",
+    description: "上传原图，按 8K 超分提示词生成高清放大结果并输出。",
+    nodes: [
+      { key: "image", type: "image", title: "参考图节点", x: 0, y: 30, params: {} },
+      {
+        key: "prompt",
+        type: "prompt",
+        title: "提示词节点",
+        x: 0,
+        y: 360,
+        params: { prompt: "进行8K级超分辨率处理，保留真实细节，不改变主体和构图", ratio: "auto", size: "2048x2048" },
+      },
+      { key: "upscale", type: "upscale", title: "超清放大节点", x: 520, y: 100, params: { tool: "upscale-8k", factor: 4, resolution: "4K", ratio: "auto" } },
+      { key: "preview", type: "preview", title: "输出节点", x: 1040, y: 100 },
+    ],
+    edges: [
+      { from: "image", sourcePort: "image", to: "upscale", targetPort: "image" },
+      { from: "prompt", sourcePort: "prompt", to: "upscale", targetPort: "prompt" },
+      { from: "upscale", sourcePort: "image", to: "preview", targetPort: "image" },
     ],
   },
 ];
@@ -469,7 +515,7 @@ export function App() {
     const imageAssets = imported.filter((asset) => asset.type === "image");
     const newNodes = imageAssets.map((asset, index) => ({
       ...createNode("image", position.x + index * 36, position.y + index * 36),
-      title: "图像节点",
+      title: "参考图节点",
       params: { assetId: asset.id },
       status: "completed" as const,
       resultAssetIds: [asset.id],
@@ -553,7 +599,7 @@ export function App() {
     if (!target) return;
     const updatedNode: CanvasNode = {
       ...target,
-      title: "图像节点",
+      title: "参考图节点",
       params: { ...target.params, assetId: imageAsset.id, error: undefined },
       status: "completed",
       resultAssetIds: [imageAsset.id],
@@ -574,7 +620,7 @@ export function App() {
         position?.x ?? (260 - project.graph.viewport.x) / project.graph.viewport.zoom,
         position?.y ?? (220 - project.graph.viewport.y) / project.graph.viewport.zoom,
       ),
-      title: "图像节点",
+      title: "参考图节点",
       params: { assetId: asset.id },
       status: "completed" as const,
       resultAssetIds: [asset.id],
