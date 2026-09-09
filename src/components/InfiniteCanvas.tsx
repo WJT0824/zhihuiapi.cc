@@ -259,11 +259,20 @@ export function InfiniteCanvas({
   }
 
   function updateNode(node: CanvasNode) {
+    const syncedText = node.type === "prompt" ? String(node.params.prompt ?? "") : undefined;
+    const sourceEdges = syncedText !== undefined ? project.graph.edges.filter((edge) => edge.sourceNode === node.id) : [];
+    const syncTargets = new Set(sourceEdges.map((edge) => edge.targetNode));
     onChange({
       ...project,
       graph: {
         ...project.graph,
-        nodes: project.graph.nodes.map((item) => (item.id === node.id ? node : item)),
+        nodes: project.graph.nodes.map((item) => {
+          if (item.id === node.id) return node;
+          if (syncedText !== undefined && item.type === "image" && syncTargets.has(item.id)) {
+            return { ...item, params: { ...item.params, prompt: syncedText } };
+          }
+          return item;
+        }),
       },
     });
   }
@@ -467,11 +476,22 @@ export function InfiniteCanvas({
         edge.targetNode === nextEdge.targetNode &&
         edge.targetPort === nextEdge.targetPort,
     );
+    const sourceNode = project.graph.nodes.find((node) => node.id === connecting.sourceNode);
+    const connectedTarget = project.graph.nodes.find((node) => node.id === targetNode);
+    const shouldSyncPrompt = sourceNode?.type === "prompt" && connectedTarget?.type === "image";
+    const syncedPrompt = shouldSyncPrompt ? String(sourceNode?.params.prompt ?? "") : undefined;
     onChange({
       ...project,
       graph: {
         ...project.graph,
         edges: existing ? project.graph.edges : [...project.graph.edges, nextEdge],
+        nodes: syncedPrompt === undefined
+          ? project.graph.nodes
+          : project.graph.nodes.map((node) =>
+              node.id === connectedTarget?.id
+                ? { ...node, params: { ...node.params, prompt: syncedPrompt } }
+                : node,
+            ),
       },
     });
     setConnecting(undefined);
@@ -1154,7 +1174,7 @@ function NodeCard({
   const isPromptNode = node.type === "prompt";
   const isViewOnlyNode = node.type === "preview" || node.type === "compare";
   const isUploadNode = node.type === "image";
-  const showFloatingControls = selected && !isViewOnlyNode;
+  const showFloatingControls = selected && !isViewOnlyNode && !isPromptNode;
   const connectedReferenceAssets = (referenceAssets ?? []).filter((asset) => asset.type === "image");
 
   const setParam = (key: string, value: unknown) => onUpdate({ ...node, params: { ...node.params, [key]: value } });

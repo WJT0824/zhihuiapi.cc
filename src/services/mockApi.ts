@@ -1,7 +1,6 @@
 import { nanoid } from "nanoid";
 import type { ZhihuiApi } from "@/types/preload";
 import type { AppSettings, BillingLedgerEntry, GenerateImageResult, LocalUser, WalletState, ZhihuiProject } from "@/types/domain";
-import { createNode } from "@/services/projectFactory";
 
 const now = () => new Date().toISOString();
 const webIdentity = (() => {
@@ -56,13 +55,6 @@ let ledger: BillingLedgerEntry[] = [];
 
 function createMockProject(title = "浏览器预览项目"): ZhihuiProject {
   const createdAt = now();
-  const image = createNode("image", 40, 240);
-  const prompt = createNode("prompt", 40, 480);
-  prompt.params.prompt = "基于上传商品图生成高级电商主图，主体清晰、卖点明确、商业摄影质感";
-  const generate = createNode("ai-generate", 520, 260);
-  generate.params.ratio = "1:1";
-  generate.params.size = "1024x1024";
-  const preview = createNode("preview", 1030, 220);
   const project: ZhihuiProject = {
     version: 1,
     id: nanoid(),
@@ -70,12 +62,8 @@ function createMockProject(title = "浏览器预览项目"): ZhihuiProject {
     createdAt,
     updatedAt: createdAt,
     graph: {
-      nodes: [image, prompt, generate, preview],
-      edges: [
-        { id: nanoid(), sourceNode: image.id, sourcePort: "image", targetNode: generate.id, targetPort: "image" },
-        { id: nanoid(), sourceNode: prompt.id, sourcePort: "prompt", targetNode: generate.id, targetPort: "prompt" },
-        { id: nanoid(), sourceNode: generate.id, sourcePort: "image", targetNode: preview.id, targetPort: "image" },
-      ],
+      nodes: [],
+      edges: [],
       viewport: { x: 0, y: 0, zoom: 1 },
       background: "light",
     },
@@ -154,14 +142,41 @@ export const mockApi: ZhihuiApi = {
   },
   ai: {
     async listModels() {
+      const inferTags = (value: string) => {
+        const lower = value.toLowerCase();
+        if (/image|img|dall|flux|gpt-image/.test(lower)) return ["text-to-image", "image-editing"] as const;
+        if (/(^|[^a-z])(gpt|o[0-9]|o1|claude|deepseek|codex|command|gemini|mini|compact|luna|sol|terra)([^a-z]|$)/i.test(lower)) return ["reasoning"] as const;
+        return ["reasoning"] as const;
+      };
       const normalizeList = (items: Array<{ id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }>) =>
         items
           .filter((item) => item.modelId || item.id)
-          .map((item) => ({
-            id: item.modelId || item.id || "gpt-image-2",
-            name: item.displayName || item.name || item.modelId || item.id || "GPT Image 2",
-            tags: Array.isArray(item.tags) && item.tags.length ? item.tags.map(String) : ["image-editing"],
-          }));
+          .map((item) => {
+            const id = item.modelId || item.id || "gpt-image-2";
+            const displayName = item.displayName || item.name || item.modelId || item.id || "GPT Image 2";
+            return {
+              id,
+              name: displayName,
+              tags: Array.isArray(item.tags) && item.tags.length ? item.tags.map(String) : [...inferTags(`${id} ${displayName}`)],
+            };
+          });
+      const apiKey = String(mockSettings.tokenFluxApiKey ?? "").trim();
+      const customBase = String(mockSettings.tokenFluxBaseUrl ?? "").trim().replace(/\/+$/, "");
+      if (apiKey && customBase) {
+        try {
+          const versionedBase = /\/v\d+$/i.test(customBase) ? customBase : `${customBase}/v1`;
+          const response = await fetch(`${versionedBase}/models`, { headers: { authorization: `Bearer ${apiKey}` } });
+          if (response.ok) {
+            const payload = await response.json();
+            const direct = normalizeList((payload.models || payload.data || []) as Array<{ id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }>);
+            if (direct.length) {
+              const hasImage = direct.some((model) => model.tags.includes("text-to-image") || model.tags.includes("image-editing"));
+              if (hasImage || !direct.some((model) => model.tags.includes("reasoning"))) return direct;
+              return [{ id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] }, ...direct];
+            }
+          }
+        } catch {}
+      }
       const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
       const token = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
       const readModels = async (path: string) => {

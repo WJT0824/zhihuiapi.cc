@@ -465,11 +465,16 @@ export function App() {
       ? { ...baseNode, title: preset.title, params: { ...baseNode.params, ...preset.params } }
       : baseNode;
     const edge = createEdgeToNode(connection, node);
+    const connectedSource = connection ? project.graph.nodes.find((item) => item.id === connection.sourceNode) : undefined;
+    const syncedNode =
+      connectedSource?.type === "prompt" && node.type === "image" && typeof connectedSource.params.prompt === "string"
+        ? { ...node, params: { ...node.params, prompt: connectedSource.params.prompt } }
+        : node;
     const next = {
       ...project,
       graph: {
         ...project.graph,
-        nodes: [...project.graph.nodes, node],
+        nodes: [...project.graph.nodes, syncedNode],
         edges: edge ? [...project.graph.edges, edge] : project.graph.edges,
       },
     };
