@@ -502,11 +502,13 @@ function bindCanvas() {
   const world = $('#canvas-world');
   if (!viewport) return;
   let panning = null;
-  viewport.addEventListener('contextmenu', (e) => {
+  const wrap = viewport.closest('.canvas-wrap');
+  if (wrap) wrap.addEventListener('contextmenu', (e) => {
     e.preventDefault();
+    e.stopPropagation();
     const node = e.target.closest('.node');
     openContextMenu(e.clientX, e.clientY, node ? node.dataset.node : null);
-  });
+  }, true);
   viewport.addEventListener('dblclick', (e) => {
     const node = e.target.closest('.node'); if (!node) return;
     state.selected = node.dataset.node; redrawCanvas();
