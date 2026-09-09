@@ -18,7 +18,6 @@ import {
   Sparkles,
   Text,
   Trash2,
-  Video,
   Wand2,
   WandSparkles,
   Layers3,
@@ -49,7 +48,6 @@ const contextNodeGroups: ContextNodeGroup[] = [
     label: "AI 图像生成",
     items: [
       { key: "image-generation", type: "ai-generate", label: "AI 生成", Icon: Sparkles, preset: { title: "AI 生成", params: { tool: "image-generation" } } },
-      { key: "image-video", type: "ai-generate", label: "AI 视频", Icon: Video, preset: { title: "AI 视频", params: { tool: "image-video", unsupportedFeature: "video" } } },
     ],
   },
   {
@@ -68,8 +66,8 @@ const contextNodeGroups: ContextNodeGroup[] = [
 ];
 
 const contextInputItems: ContextNodeItem[] = [
-  { key: "text-input", type: "prompt", label: "提示词输入", Icon: Text, preset: { title: "提示词输入" } },
-  { key: "image-input", type: "image", label: "参考图输入", Icon: Image, preset: { title: "参考图输入" } },
+  { key: "text-input", type: "prompt", label: "文本节点", Icon: Text, preset: { title: "文本节点" } },
+  { key: "image-input", type: "image", label: "图片节点", Icon: Image, preset: { title: "图片节点" } },
 ];
 
 const ratioOptions = ["16:9", "9:16", "4:3", "3:4", "2:3", "3:2", "1:1", "21:9", "9:21", "9:20", "20:9", "auto", "custom"];
