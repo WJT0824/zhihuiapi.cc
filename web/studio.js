@@ -143,23 +143,38 @@ function nodeHtml(node) {
   const running = node.status === 'running';
   const statusBadge = ['generate', 'upscale', 'background'].includes(node.type) && node.status && node.status !== 'idle'
     ? `<span class="node-status ${node.status === 'failed' ? 'failed' : running ? 'running' : ''}">${node.status === 'running' ? '生成中' : node.status === 'done' ? '已完成' : '失败'}</span>` : '';
-  let body = '';
-  if (node.type === 'prompt') body = `<div class="preview">${esc(node.value || '点击右侧面板输入创作描述…')}</div>`;
-  if (node.type === 'image') body = node.refs && node.refs.length
-    ? node.refs.map((r) => r.preview ? `<img class="thumb" src="${r.preview}" alt="">` : '<div class="placeholder">已上传</div>').slice(0, 2).join('')
-    : '<div class="placeholder">未添加参考图</div>';
-  if (node.type === 'generate') body = `<div class="preview">${esc(node.prompt || '自动收集画布上的提示词节点')}</div><div style="font-size:11px;color:#8b96ad;margin-top:5px">${esc(node.model || '')} · ${esc(node.ratio || '')} · ${esc(node.resolution || '')}</div>`;
-  if (node.type === 'upscale') body = `<div class="preview">${esc(node.prompt || '高清放大，保留细节与材质')}</div><div style="font-size:11px;color:#8b96ad;margin-top:5px">${esc(node.tool || '高清放大')} · ${esc(node.resolution || '4K')}</div>`;
-  if (node.type === 'output') body = node.result && node.result.preview ? `<img class="thumb" src="${node.result.preview}" alt="result">` : '<div class="placeholder">生成结果将显示在这里</div>';
   const hasIn = ['generate', 'upscale', 'background', 'output'].includes(node.type);
   const hasOut = ['prompt', 'image', 'generate', 'upscale', 'background'].includes(node.type);
   return `<article class="node${selected}" data-node="${node.id}" data-action="select-node" data-id="${node.id}" data-type="${node.type}" style="left:${node.x}px;top:${node.y}px">
     <div class="node-head"><span class="node-icon ${iconBg[node.type]}">${iconMap[node.type]}</span><span class="node-title">${node.title}</span>${statusBadge}</div>
     ${hasIn ? '<i class="port in" data-port="in" data-node="' + node.id + '" title="输入"></i>' : ''}${hasOut ? '<i class="port out" data-port="out" data-node="' + node.id + '" title="输出"></i>' : ''}
-    <div class="node-body">${body}</div>
+    <div class="node-body">${nodeInlineBody(node)}</div>
     ${['generate', 'upscale', 'background'].includes(node.type) ? '<div class="node-actions"><button class="mini-btn" data-action="run-node" data-id="' + node.id + '">▶ ' + (node.type === 'upscale' ? '高清放大' : node.type === 'background' ? '处理' : '生成') + '</button></div>' : ''}
-    <div class="node-actions"><button class="mini-btn" data-action="select-node" data-id="${node.id}">编辑节点</button></div>
   </article>`;
+}
+
+function modelOptionHtml() {
+  return state.models.length
+    ? state.models.map((m) => `<option value="${esc(m.modelId || m.id)}">${esc(m.displayName || m.id)}</option>`).join('')
+    : '<option value="gpt-image-2">GPT Image 2</option>';
+}
+
+function nodeInlineBody(node) {
+  if (node.type === 'prompt') return `<textarea class="input node-inline-input" data-node-input="value" data-id="${node.id}" rows="5" placeholder="输入创作描述…">${esc(node.value || '')}</textarea>`;
+  if (node.type === 'image') {
+    const previews = (node.refs || []).map((r) => r.preview ? `<img class="thumb" style="height:86px" src="${r.preview}" alt="">` : '').join('');
+    return `<div class="field" style="margin:0"><input type="file" class="input" data-image-input="1" data-id="${node.id}" accept="image/*" multiple><div style="display:flex;gap:6px;margin-top:6px">${previews || '<div class="placeholder" style="height:60px">上传图片后在此预览</div>'}</div></div>`;
+  }
+  if (node.type === 'generate') return `
+    <div class="field"><label>补充提示</label><textarea class="input node-inline-input" data-node-input="prompt" data-id="${node.id}" rows="3">${esc(node.prompt || '')}</textarea></div>
+    <div class="inline-grid"><select class="input" data-node-input="model" data-id="${node.id}">${modelOptionHtml()}</select><select class="input" data-node-input="ratio" data-id="${node.id}">${['1:1', '4:3', '3:4', '16:9', '9:16'].map((r) => `<option ${node.ratio === r ? 'selected' : ''}>${r}</option>`).join('')}</select><select class="input" data-node-input="resolution" data-id="${node.id}">${['1K', '2K', '4K'].map((r) => `<option ${node.resolution === r ? 'selected' : ''}>${r}</option>`).join('')}</select><select class="input" data-node-input="quality" data-id="${node.id}">${['auto', 'high', 'medium', 'low'].map((r) => `<option ${node.quality === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div>`;
+  if (node.type === 'upscale') return `
+    <div class="field"><label>放大模式</label><select class="input" data-node-input="tool" data-id="${node.id}"><option value="restore-4k" ${node.tool === 'restore-4k' ? 'selected' : ''}>4K 修复（2x）</option><option value="upscale-8k" ${node.tool === 'upscale-8k' ? 'selected' : ''}>8K 超分（4x）</option></select></div>
+    <div class="field"><label>放大提示</label><textarea class="input node-inline-input" data-node-input="prompt" data-id="${node.id}" rows="3">${esc(node.prompt || '')}</textarea></div>
+    <div class="inline-grid"><select class="input" data-node-input="model" data-id="${node.id}">${modelOptionHtml()}</select><select class="input" data-node-input="resolution" data-id="${node.id}"><option value="2K" ${node.resolution === '2K' ? 'selected' : ''}>2K</option><option value="4K" ${node.resolution === '4K' ? 'selected' : ''}>4K</option></select></div>`;
+  if (node.type === 'output') return node.result && node.result.preview ? `<img class="thumb" style="height:180px" src="${node.result.preview}" alt="result">` : '<div class="placeholder" style="height:130px">生成结果将显示在这里</div>';
+  if (node.type === 'background') return `<div class="field"><label>处理提示</label><textarea class="input node-inline-input" data-node-input="prompt" data-id="${node.id}" rows="3">${esc(node.prompt || '')}</textarea></div>`;
+  return '<div class="preview"></div>';
 }
 
 function edgePath(from, to) {
@@ -192,6 +207,22 @@ function redrawCanvas() {
     port.addEventListener('click', (e) => handlePortClick(port.dataset.node, port.dataset.port, e));
     port.addEventListener('pointerdown', (e) => handlePortDown(port.dataset.node, port.dataset.port, e));
     port.addEventListener('mousedown', (e) => handlePortDown(port.dataset.node, port.dataset.port, e));
+  });
+  bindInlineNodeInputs();
+}
+
+function bindInlineNodeInputs() {
+  const world = $('#canvas-world'); if (!world) return;
+  world.querySelectorAll('[data-node-input]').forEach((el) => {
+    const isText = el.tagName === 'TEXTAREA';
+    el.addEventListener(isText ? 'input' : 'change', () => {
+      const node = state.nodes.find((n) => n.id === el.dataset.id); if (!node) return;
+      node[el.dataset.nodeInput] = el.value;
+      if (!isText) redrawCanvas();
+    });
+  });
+  world.querySelectorAll('[data-image-input]').forEach((el) => {
+    el.addEventListener('change', () => handleImageUpload(el));
   });
 }
 
@@ -254,7 +285,6 @@ function redrawEdgesOnly() {
 
 function studioPage() {
   const gen = state.nodes.find((n) => n.type === 'generate') || state.nodes[0];
-  const sel = state.nodes.find((n) => n.id === state.selected) || gen;
   const add = (type, label, desc) => paletteItem(type, label, desc);
   return `<section class="workbench">
     <aside class="rail">
@@ -275,10 +305,8 @@ function studioPage() {
       <div class="canvas-floating-tools">
         <button class="mini-btn" data-action="layout-flow" data-mode="auto" title="智能整理节点">⇶ 自动整理</button>
         <button class="mini-btn" data-action="toggle-rail" title="展开/收起节点库">◧ 节点库</button>
-        <button class="mini-btn" data-action="toggle-inspector" title="展开/收起属性">▤ 属性</button>
       </div>
     </div>
-    <aside class="inspector" id="inspector">${inspectorHtml(sel)}</aside>
   </section>`;
 }
 
@@ -591,8 +619,7 @@ async function handleImageUpload(input) {
       } catch (err) { toast('参考图上传失败：' + err.message, 'error'); }
     }
   }
-  const previewBox = $('#refs-preview'); if (previewBox) previewBox.innerHTML = node.refs.map((r) => `<img class="result-thumb" style="margin-top:7px" src="${r.preview}">`).join('');
-  const inspector = $('#inspector'); if (inspector) inspector.innerHTML = inspectorHtml(node); bindInspectorEvents();
+  redrawCanvas();
 }
 
 function addNode(type, x, y) {
@@ -940,8 +967,9 @@ function bindAdmin() {
 
 function bindDelegated() {
   APP.addEventListener('click', async (e) => {
-    if (e.target.closest('.port')) return;
     const actionEl = e.target.closest('[data-action]');
+    if (actionEl && actionEl.classList.contains('node') && e.target.closest('input,textarea,select')) return;
+    if (!actionEl) return;
     if (actionEl) {
       const action = actionEl.dataset.action;
       if (action === 'go-auth') { state.page = 'auth'; state.mode = 'login'; location.hash = 'auth'; render(); }
