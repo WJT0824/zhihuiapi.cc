@@ -190,7 +190,18 @@ function redrawCanvas() {
   world.innerHTML = `<svg class="edge-svg" viewBox="0 0 1800 1100" preserveAspectRatio="none"><defs><linearGradient id="edgeGradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#ff8a73"/><stop offset="55%" stop-color="#5a4cf4"/><stop offset="100%" stop-color="#14b8d4"/></linearGradient></defs>${edgeMarkup}${ghost}</svg>` + state.nodes.map(nodeHtml).join('');
   world.querySelectorAll('.port').forEach((port) => {
     port.addEventListener('click', (e) => handlePortClick(port.dataset.node, port.dataset.port, e));
+    port.addEventListener('pointerdown', (e) => handlePortDown(port.dataset.node, port.dataset.port, e));
+    port.addEventListener('mousedown', (e) => handlePortDown(port.dataset.node, port.dataset.port, e));
   });
+}
+
+function handlePortDown(nodeId, kind, e) {
+  if (kind !== 'out' || state.connecting) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const node = state.nodes.find((n) => n.id === nodeId); if (!node) return;
+  state.connecting = { source: nodeId, x: node.x + 222, y: node.y + 52 };
+  redrawCanvas();
 }
 
 function handlePortClick(nodeId, kind, e) {
@@ -209,6 +220,26 @@ function handlePortClick(nodeId, kind, e) {
     closeConnectionMenu();
     redrawCanvas();
   }
+}
+
+function finishPortConnection(e) {
+  if (!state.connecting) return;
+  const sourceId = state.connecting.source;
+  const over = document.elementFromPoint(e.clientX, e.clientY);
+  const inPort = over && over.closest && over.closest('.port.in');
+  const targetId = inPort ? inPort.dataset.node : null;
+  if (targetId && targetId !== sourceId) {
+    const exists = state.edges.some((edge) => edge.source === sourceId && edge.target === targetId);
+    if (!exists) state.edges.push({ id: 'edge-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6), source: sourceId, target: targetId });
+    state.connecting = null;
+    closeConnectionMenu();
+    redrawCanvas();
+    return;
+  }
+  state.connecting = null;
+  closeConnectionMenu();
+  openConnectionMenu(e.clientX, e.clientY, sourceId);
+  redrawCanvas();
 }
 
 function redrawEdgesOnly() {
@@ -488,7 +519,8 @@ function bindCanvas() {
       redrawCanvas();
     }
   });
-  window.addEventListener('pointerup', () => { panning = null; viewport && viewport.classList.remove('panning'); if (state.drag) stopDrag(); });
+  window.addEventListener('pointerup', (e) => { if (state.connecting) finishPortConnection(e); panning = null; viewport && viewport.classList.remove('panning'); if (state.drag) stopDrag(); });
+  window.addEventListener('mouseup', (e) => { if (state.connecting) finishPortConnection(e); });
   viewport.addEventListener('wheel', (e) => {
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.08 : 0.93;
