@@ -181,7 +181,16 @@ const liveGatewayModels = async () => {
   if (!config.baseUrl || !config.apiKey) return gatewayModels();
   try {
     const live = await readUpstreamModels(config.baseUrl, config.apiKey);
-    return live.length ? live : gatewayModels();
+    const ordered = new Map();
+    for (const fallback of gatewayModels()) {
+      const key = fallback.modelId || fallback.id;
+      if (key) ordered.set(key, fallback);
+    }
+    for (const model of live) {
+      const key = model.modelId || model.id;
+      if (key && !ordered.has(key)) ordered.set(key, model);
+    }
+    return [...ordered.values()];
   } catch {
     return gatewayModels();
   }
