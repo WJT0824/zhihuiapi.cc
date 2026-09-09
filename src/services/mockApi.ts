@@ -45,6 +45,7 @@ function createMockProject(title = "浏览器预览项目"): ZhihuiProject {
       nodes: [],
       edges: [],
       viewport: { x: 0, y: 0, zoom: 1 },
+      background: "light",
     },
     assetIds: [],
     exportSettings: { format: "png", width: 1920, height: 1080, scale: 1, transparent: false },

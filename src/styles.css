@@ -2171,3 +2171,70 @@ textarea:focus {
   font-size: 12px;
   padding: 0 14px;
 }
+
+/* Zhihui website-compatible light theme */
+:root, body {
+  color-scheme: light;
+  background: #f4f7fc;
+  color: #17223b;
+}
+.topbar, .toolbar, .sidebar, .inspector, .sidebar-panel, .statusbar {
+  background: #ffffff;
+  border-color: #dfe6f2;
+  color: #17223b;
+}
+.topbar { border-bottom: 1px solid #dfe6f2; }
+.statusbar { border-top: 1px solid #dfe6f2; color: #68748e; background:#fff; }
+.toolbar button, .segmented button, .wide-action, .resource-list button, .template-list button, .workflow-list button, .node-grid button, .project-item {
+  background: #ffffff;
+  border-color: #dfe6f2;
+  color: #17223b;
+}
+.toolbar button:hover, .segmented button:hover, .template-list button:hover, .workflow-list button:hover, .node-grid button:hover, .resource-list button:hover {
+  background: #eef1ff;
+  border-color: #b9c4ff;
+  color: #4f5dfa;
+}
+.toolbar button[title="积分充值"] {
+  background: #fff4e0;
+  border-color: #f5c25a;
+  color: #8a5a00;
+}
+.sidebar { background: #ffffff; }
+.side-rail { border-color:#dfe6f2; background:#fbfcff; }
+.side-rail button { color: #68748e; }
+.side-rail button:hover, .side-rail button.active { background:#eef1ff; color:#4f5dfa; }
+.rail-divider { background:#dfe6f2; }
+.sidebar-panel { background:#ffffff; }
+.tool-section h2, .brand h1, .template-list strong, .project-item strong, .resource-list button { color:#17223b; }
+.brand p, .template-list span, .project-item span, .muted { color:#68748e; }
+.segmented .active, .project-item.active { border-color:#6c5cf6; background:#ececff; color:#4f5dfa; }
+.canvas-viewport.canvas-bg-gradient {
+  background: linear-gradient(135deg, #edf0ff 0%, #f8f5ff 48%, #eaf8ff 100%);
+}
+.canvas-viewport.canvas-bg-light { background:#f4f7fc; }
+.canvas-bg-gradient .canvas-grid { background-image: radial-gradient(circle, rgba(75, 91, 250, .18) 1px, transparent 1.5px); }
+.edge-layer path { stroke: #6c5cf6; }
+.edge-layer .edge-preview { stroke:#14b8d4; }
+.edge-layer .edge-running { stroke:#14b8d4; }
+.canvas-node {
+  background: rgba(255,255,255,.98);
+  border-color:#dce3f1;
+  box-shadow: 0 12px 28px rgba(30,45,90,.08);
+}
+.canvas-node.selected { border-color:#4f5dfa; box-shadow:0 0 0 1px #4f5dfa55, 0 14px 30px rgba(79,93,250,.14); }
+.canvas-node.running { border-color:#f5a524; }
+.canvas-node.failed { border-color:#ff7a6b; }
+.canvas-node header strong, .node-header-action, .node-body p, .node-reference-heading { color:#17223b; }
+.node-status { color:#68748e; }
+.prompt-node-textarea, .node-mini-controls select, .workbench-controls select, .node-custom-size input {
+  background:#f8faff;
+  border-color:#dfe6f2;
+  color:#17223b;
+}
+.run-button, .wide-action.compact {
+  background: linear-gradient(135deg, #4f5dfa, #6c3ef5);
+  border-color: transparent;
+  color: #fff;
+}
+.run-button:hover, .wide-action.compact:hover { background:#4f5dfa; color:#fff; }
