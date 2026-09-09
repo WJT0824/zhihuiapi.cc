@@ -153,10 +153,11 @@ function nodeHtml(node) {
   </article>`;
 }
 
-function modelOptionHtml() {
-  return state.models.length
-    ? state.models.map((m) => `<option value="${esc(m.modelId || m.id)}">${esc(m.displayName || m.id)}</option>`).join('')
-    : '<option value="gpt-image-2">GPT Image 2</option>';
+function modelOptionHtml(selected = 'gpt-image-2') {
+  const list = state.models.length ? state.models.slice() : [{ id: 'gpt-image-2', modelId: 'gpt-image-2', displayName: 'GPT Image 2' }];
+  const matched = list.some((m) => (m.modelId || m.id || '').toLowerCase() === String(selected || 'gpt-image-2').toLowerCase());
+  if (!matched) list.unshift({ id: selected || 'gpt-image-2', modelId: selected || 'gpt-image-2', displayName: (selected || 'gpt-image-2') === 'gpt-image-2' ? 'GPT Image 2' : (selected || 'gpt-image-2') });
+  return list.map((m) => `<option ${((m.modelId || m.id) === (selected || 'gpt-image-2') || (m.modelId || m.id || '').toLowerCase() === String(selected || 'gpt-image-2').toLowerCase()) ? 'selected' : ''} value="${esc(m.modelId || m.id)}">${esc(m.displayName || m.id)}</option>`).join('');
 }
 
 function nodeInlineBody(node) {
@@ -392,7 +393,7 @@ function settingsPage() {
     <div class="panel-card"><h3 style="margin-bottom:18px">个人资料</h3><form id="settings-form">
       <label class="field"><span>昵称</span><input class="input" name="nickname" minlength="2" value="${esc(values.nickname)}"></label>
       <div class="form-grid" style="margin-top:14px">
-        <div class="field"><label>默认模型</label><select class="input" name="defaultModel">${state.models.length ? state.models.map((m) => `<option ${(values.defaultModel === (m.modelId || m.id)) ? 'selected' : ''} value="${esc(m.modelId || m.id)}">${esc(m.displayName || m.id)}</option>`).join('') : '<option value="gpt-image-2">GPT Image 2</option>'}</select></div>
+        <div class="field"><label>默认模型</label><select class="input" name="defaultModel">${modelOptionHtml(values.defaultModel)}</select><small style="display:block;color:#8a94a8;margin-top:5px">模型下拉来自平台 API 实际读取列表，已读取 ${state.models.length ? state.models.length + ' 个' : '内置默认'}。</small></div>
         <div class="field"><label>默认比例</label><select class="input" name="defaultRatio">${['1:1', '4:3', '3:4', '16:9', '9:16'].map((r) => `<option ${values.defaultRatio === r ? 'selected' : ''}>${r}</option>`).join('')}</select></div>
       </div>
       <div class="form-grid">
@@ -442,7 +443,7 @@ async function render() {
   }
   if (state.page === 'history') { APP.innerHTML = await historyPage(); return; }
   if (state.page === 'wallet') { APP.innerHTML = walletPage(); bindWallet(); return; }
-  if (state.page === 'settings') { APP.innerHTML = settingsPage(); bindSettings(); return; }
+  if (state.page === 'settings') { await loadModels(); APP.innerHTML = settingsPage(); bindSettings(); return; }
   if (state.page === 'admin') { APP.innerHTML = await adminPage(); bindAdmin(); return; }
   if (state.user) { state.page = 'studio'; location.hash = 'studio'; render(); return; }
   APP.innerHTML = landing(); bindLanding();
@@ -472,6 +473,7 @@ async function submitAuth(form) {
     if (d.credits !== undefined && state.user) state.user.points = d.credits;
     toast(state.mode === 'register' ? '账号已创建' : '登录成功', 'ok');
     state.page = 'studio'; location.hash = 'studio'; render();
+    loadModels();
     refreshAccount();
   } catch (err) {
     const box = $('#auth-error'); if (box) { box.style.display = 'block'; box.textContent = err.message; }

@@ -2238,3 +2238,4 @@ textarea:focus {
   color: #fff;
 }
 .run-button:hover, .wide-action.compact:hover { background:#4f5dfa; color:#fff; }
+.settings-hint { display:block; margin-top:6px; font-size:12px; color:#68748e; line-height:1.55; }

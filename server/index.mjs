@@ -135,26 +135,75 @@ const publicTask = (task) => ({
 });
 
 const activeAiConfig = () => ({ baseUrl: AI_BASE_URL || store.aiConfig?.baseUrl || '', apiKey: AI_API_KEY || store.aiConfig?.apiKey || '', model: AI_IMAGE_MODEL || store.aiConfig?.model || 'gpt-image-2' });
-const gatewayModels = () => { const config = activeAiConfig(); return [{ id: config.model, modelId: config.model, displayName: config.model === 'gpt-image-2' ? 'GPT Image 2' : '平台图像模型', providerName: '郅绘 AI 网关', price: 3, recommended: true, capabilities: { supportsEdit: true, maxReferences: 10, aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'], resolutions: ['1K', '2K', '4K'], qualities: ['auto', 'high', 'medium', 'low'] } }]; };
+const gatewayModels = () => {
+  const config = activeAiConfig();
+  const model = config.model || 'gpt-image-2';
+  const displayName = model === 'gpt-image-2' ? 'GPT Image 2' : model === 'T香蕉2' ? 'T香蕉2' : model === 'T香蕉pro' ? 'T香蕉pro' : model;
+  return [{ id: model, modelId: model, displayName, name: displayName, providerName: '郅绘 AI 网关', price: 3, recommended: true, tags: ['text-to-image', 'image-editing'], capabilities: { supportsEdit: true, maxReferences: 10, aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'], resolutions: ['1K', '2K', '4K'], qualities: ['auto', 'high', 'medium', 'low'] } }];
+};
+const normalizeLiveModelItem = (item, configModel = '') => {
+  const id = String(item.id || item.modelId || item.name || '').trim();
+  const rawName = String(item.name || item.displayName || id || '').trim();
+  const lower = `${id} ${rawName}`.toLowerCase();
+  const endpoints = Array.isArray(item.supported_endpoint_types) ? item.supported_endpoint_types.map((name) => String(name || '').toLowerCase()).filter(Boolean) : [];
+  const hasImageEndpoint = endpoints.some((name) => name.includes('image') || name === 'images' || name.includes('img'));
+  const hasReasoningEndpoint = endpoints.some((name) => name.includes('chat') || name.includes('reason') || name.includes('completion') || name.includes('text'));
+  const looksLikeImage = /(^|[^a-z])(gpt-image|dall|flux|image|img)([^a-z]|$)/i.test(lower);
+  const looksLikeReasoning = /(^|[^a-z])(gpt|o[0-9]|o1|claude|deepseek|codex|command|gemini|mini|compact|luna|sol|terra)([^a-z]|$)/i.test(lower) && !/video|image|img/i.test(lower);
+  let tags = [];
+  if (!/video|image|img/i.test(lower) && (hasReasoningEndpoint || looksLikeReasoning)) tags.push('reasoning');
+  if (hasImageEndpoint || looksLikeImage) tags = ['text-to-image', 'image-editing'];
+  if (!tags.length && !endpoints.length) tags.push('reasoning');
+  if (!tags.length) tags = ['reasoning'];
+  return {
+    id,
+    modelId: id,
+    name: rawName || id,
+    displayName: rawName || id,
+    providerName: String(item.owned_by || item.provider || '郅绘 AI 网关'),
+    price: 3,
+    recommended: Boolean(configModel && id === configModel),
+    tags,
+  };
+};
+const modelsFromPayload = (payload, configModel = '') => {
+  const source = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
+  return source.map((item) => normalizeLiveModelItem(item, configModel)).filter((model) => model.id);
+};
+const readUpstreamModels = async (baseUrl, apiKey) => {
+  const endpoint = `${String(baseUrl || '').replace(/\/+$/, '')}/v1/models`;
+  const response = await fetch(endpoint, { headers: { authorization: `Bearer ${apiKey}` } });
+  if (!response.ok) throw new Error(`模型接口返回 ${response.status}`);
+  return modelsFromPayload(await response.json());
+};
 const liveGatewayModels = async () => {
   const config = activeAiConfig();
   if (!config.baseUrl || !config.apiKey) return gatewayModels();
   try {
-    const response = await fetch(`${config.baseUrl.replace(/\/+$/, '')}/v1/models`, { headers: { authorization: `Bearer ${config.apiKey}` } });
-    if (!response.ok) return gatewayModels();
-    const payload = await response.json();
-    const source = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
-    const models = source
-      .filter((item) => {
-        const endpoints = item.supported_endpoint_types || [];
-        const id = String(item.id || '');
-        return !endpoints.length || endpoints.includes('image-generation') || endpoints.includes('images') || endpoints.includes('image') || /image|img/i.test(id);
-      })
-      .map((item) => ({ id: String(item.id || ''), modelId: String(item.id || ''), displayName: item.name || item.displayName || String(item.id || ''), providerName: item.owned_by || '郅绘 AI 网关', price: 3, recommended: String(item.id || '').includes(config.model) }));
-    return models.length ? models : gatewayModels();
+    const live = await readUpstreamModels(config.baseUrl, config.apiKey);
+    return live.length ? live : gatewayModels();
   } catch {
     return gatewayModels();
   }
+};
+const imageGatewayModels = async () => {
+  const live = await liveGatewayModels();
+  const ordered = new Map();
+  for (const fallback of gatewayModels()) {
+    const key = fallback.modelId || fallback.id;
+    if (key) ordered.set(key, fallback);
+  }
+  for (const model of live) {
+    const key = model.modelId || model.id;
+    if (key && !ordered.has(key)) ordered.set(key, model);
+  }
+  if (![...ordered.values()].some((model) => model.tags?.includes('text-to-image') || model.tags?.includes('image-editing'))) {
+    for (const fallback of gatewayModels()) {
+      const key = fallback.modelId || fallback.id;
+      if (key) ordered.set(key, fallback);
+    }
+  }
+  return [...ordered.values()];
 };
 const gatewayJob = (job) => ({ success: job.status === 'succeeded', jobId: job.id, assetId: job.status === 'succeeded' ? job.id : null, status: job.status, error: job.error || undefined, prompt: job.prompt || '', modelId: job.model || AI_IMAGE_MODEL, createdAt: job.createdAt || '' });
 const issueTokens = (user) => { const accessToken = uid(); const refreshToken = uid(); store.sessions[hash(accessToken)] = { userId: user.id, kind: 'access', createdAt: now() }; store.sessions[hash(refreshToken)] = { userId: user.id, kind: 'refresh', createdAt: now() }; return { access_token: accessToken, refresh_token: refreshToken }; };
@@ -270,14 +319,19 @@ async function gateway(req, res, pathName) {
     return send(res, 200, { success: true, access_token: accessToken });
   }
   if (req.method === 'POST' && pathName === '/v1/ai/test-connection') {
-    const apiKey = String(body.apiKey || '').trim();
-    let baseUrl = String(body.baseUrl || '').trim().replace(/\/+$/, '').replace(/\/v\d+$/i, '');
+    const platform = activeAiConfig();
+    const apiKey = String(body.apiKey || platform.apiKey || '').trim();
+    let baseUrl = String(body.baseUrl || platform.baseUrl || '').trim().replace(/\/+$/, '').replace(/\/v\d+$/i, '');
     const mode = String(body.mode || 'models');
-    if (!apiKey || !baseUrl) return fail(400, '请输入 API Key 和服务地址');
+    if (!apiKey || !baseUrl) return fail(400, body.apiKey || body.baseUrl ? '请输入 API Key 和服务地址' : '服务器尚未配置默认 AI 服务，请联系管理员在运营后台配置');
     try {
       const endpoint = mode === 'reasoning' ? '/v1/chat/completions' : '/v1/models';
       const response = await fetch(baseUrl + endpoint, { headers: { authorization: `Bearer ${apiKey}` } });
-      if (response.ok) return send(res, 200, { success: true, message: mode === 'reasoning' ? '推理模型连接成功' : 'API 连接成功，已读取模型列表' });
+      if (response.ok) {
+        let models = [];
+        if (mode !== 'reasoning') models = modelsFromPayload(await response.json().catch(() => ({})), String(body.model || ''));
+        return send(res, 200, { success: true, message: mode === 'reasoning' ? '推理模型连接成功（平台默认服务）' : `API 连接成功，已读取 ${models.length || ''} 个模型${body.apiKey || body.baseUrl ? '' : '（默认使用平台服务）'}`, models });
+      }
       const text = await response.text();
       return fail(400, `连接失败（${response.status}）：${text.slice(0, 180)}`);
     } catch (error) {
@@ -299,7 +353,8 @@ async function gateway(req, res, pathName) {
     await persist();
     return send(res, 200, { success: true, user: safeUser(user) });
   }
-  if (req.method === 'GET' && pathName === '/v1/image/models') return send(res, 200, { success: true, models: await liveGatewayModels() });
+  if (req.method === 'GET' && pathName === '/v1/models') return send(res, 200, { success: true, models: await liveGatewayModels() });
+  if (req.method === 'GET' && pathName === '/v1/image/models') return send(res, 200, { success: true, models: await imageGatewayModels() });
   if (req.method === 'POST' && pathName === '/v1/image/references') {
     if (!files.length) return fail(400, '没有收到参考图');
     const result = [];

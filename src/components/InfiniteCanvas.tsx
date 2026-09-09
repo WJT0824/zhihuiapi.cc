@@ -94,8 +94,34 @@ function ratioToSize(ratio: string, resolution = "1K") {
   return `${Math.round((longEdge * widthRatio) / heightRatio)}x${longEdge}`;
 }
 
-const imageModelOptions = [{ value: "gpt-image-2", label: "GPT Image 2" }];
-const inferenceModelOptions = ["GPT-5.5", "GPT-5.4"];
+const imageFallbackModel = (): TokenFluxModel => ({ id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] });
+const reasoningFallbackModels = (): TokenFluxModel[] => [
+  { id: "GPT-5.5", name: "GPT-5.5", tags: ["reasoning"] },
+  { id: "GPT-5.4", name: "GPT-5.4", tags: ["reasoning"] },
+];
+function modelChoicesForRunMode(models: TokenFluxModel[], runMode: string, currentValue: string): TokenFluxModel[] {
+  const imageMode = runMode !== "inference";
+  const fallbacks = imageMode ? [imageFallbackModel()] : reasoningFallbackModels();
+  const filtered = models.filter((model) =>
+    imageMode ? model.tags.includes("text-to-image") || model.tags.includes("image-editing") : model.tags.includes("reasoning"),
+  );
+  const list: TokenFluxModel[] = [];
+  const seen = new Set<string>();
+  for (const model of filtered.length ? filtered : fallbacks) {
+    if (!seen.has(model.id)) {
+      seen.add(model.id);
+      list.push(model);
+    }
+  }
+  if (currentValue && !seen.has(currentValue) && ![...seen].some((id) => id.toLowerCase() === currentValue.toLowerCase())) {
+    list.push({
+      id: currentValue,
+      name: imageMode && currentValue.toLowerCase() === "gpt-image-2" ? "GPT Image 2" : currentValue,
+      tags: imageMode ? ["text-to-image", "image-editing"] : ["reasoning"],
+    });
+  }
+  return list;
+}
 type ResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 type ImageViewerState = { asset: AssetRecord; scale: number; x: number; y: number };
 type ConnectionDraft = { sourceNode: string; sourcePort: string };
@@ -1381,10 +1407,13 @@ function MiniRunControls({
   onSetCustomSize: (width: number, height: number) => void;
   onRun: () => void;
 }) {
-  void models;
   const runMode = String(node.params.runMode ?? "image");
-  const selectedModel = runMode === "inference" ? normalizeUiModel(String(node.params.inferenceModel ?? "GPT-5.5")) : normalizeUiModel(String(node.params.model ?? "gpt-image-2"));
-  const selectableModels = runMode === "inference" ? inferenceModelOptions : imageModelOptions;
+  const currentRawModel = runMode === "inference" ? String(node.params.inferenceModel ?? "GPT-5.5") : String(node.params.model ?? "gpt-image-2");
+  const selectableModels = modelChoicesForRunMode(models, runMode, currentRawModel);
+  const selectedModel =
+    selectableModels.find((model) => model.id.toLowerCase() === normalizeUiModel(currentRawModel).toLowerCase())?.id ??
+    selectableModels.find((model) => model.id.toLowerCase() === currentRawModel.toLowerCase())?.id ??
+    normalizeUiModel(currentRawModel);
   const cost = generationCost({ resolution, n: node.params.n });
   const insufficient = billingEnabled && walletBalance < cost;
   return (
@@ -1405,8 +1434,8 @@ function MiniRunControls({
         title={runMode === "inference" ? "推理模型" : "生图模型"}
       >
         {selectableModels.map((model) => (
-          <option key={typeof model === "string" ? model : model.value} value={typeof model === "string" ? model : model.value}>
-            {typeof model === "string" ? model : model.label}
+          <option key={model.id} value={model.id}>
+            {model.name || model.id}
           </option>
         ))}
       </select>

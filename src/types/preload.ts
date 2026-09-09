@@ -51,7 +51,7 @@ export interface ZhihuiApi {
   settings: {
     get(): Promise<AppSettings>;
     set(settings: AppSettings): Promise<AppSettings>;
-    testApiKey(apiKey?: string, baseUrl?: string, mode?: "models" | "image" | "reasoning"): Promise<{ ok: boolean; message: string }>;
+    testApiKey(apiKey?: string, baseUrl?: string, mode?: "models" | "image" | "reasoning"): Promise<{ ok: boolean; message: string; models?: TokenFluxModel[] }>;
   };
 }
 

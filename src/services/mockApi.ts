@@ -12,11 +12,31 @@ const webIdentity = (() => {
   return { nickname: "本地用户", points: 100 };
 })();
 
-const mockSettings: AppSettings = {
+const DEFAULT_AI_BASE_URL = "https://tokenflux.cloud/v1";
+const SETTINGS_STORAGE_KEY = "zh_canvas_settings";
+const defaultBrowserSettings = (): AppSettings => ({
+  tokenFluxBaseUrl: DEFAULT_AI_BASE_URL,
   defaultModel: "gpt-image-2",
   defaultRatio: "1:1",
   upscaleFactor: 2,
   taskConcurrency: 2,
+});
+const loadBrowserSettings = (): AppSettings => {
+  const base = defaultBrowserSettings();
+  try {
+    if (typeof localStorage !== "undefined") {
+      const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (raw) return { ...base, ...(JSON.parse(raw) as Partial<AppSettings>) };
+    }
+  } catch {}
+  return base;
+};
+
+let mockSettings: AppSettings = loadBrowserSettings();
+const persistSettings = (settings: AppSettings) => {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {}
 };
 
 const projects = new Map<string, ZhihuiProject>();
@@ -134,20 +154,41 @@ export const mockApi: ZhihuiApi = {
   },
   ai: {
     async listModels() {
+      const normalizeList = (items: Array<{ id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }>) =>
+        items
+          .filter((item) => item.modelId || item.id)
+          .map((item) => ({
+            id: item.modelId || item.id || "gpt-image-2",
+            name: item.displayName || item.name || item.modelId || item.id || "GPT Image 2",
+            tags: Array.isArray(item.tags) && item.tags.length ? item.tags.map(String) : ["image-editing"],
+          }));
+      const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
+      const token = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
+      const readModels = async (path: string) => {
+        const response = await fetch(`${apiOrigin}${path}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+        if (!response.ok) throw new Error(`模型列表读取失败（${response.status}）`);
+        const payload = await response.json();
+        return normalizeList((payload.models || payload.data || []) as Array<{ id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }>);
+      };
       try {
-        const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
-        const token = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
-        const response = await fetch(`${apiOrigin}/v1/image/models`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
-        if (response.ok) {
-          const payload = await response.json();
-          const modelItems = (payload.models || []) as Array<{ id?: string; modelId?: string; displayName?: string; name?: string }>;
-          const models = modelItems.map((item) => ({ id: item.modelId || item.id || "gpt-image-2", name: item.displayName || item.name || item.id || "GPT Image 2", tags: ["image-editing"] }));
-          if (models.length) return models;
+        const live = await readModels("/v1/models");
+        if (live.length) {
+          const hasImage = live.some((model) => model.tags.includes("text-to-image") || model.tags.includes("image-editing"));
+          if (hasImage || !live.some((model) => model.tags.includes("reasoning"))) return live;
+          return [
+            { id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] },
+            ...live,
+          ];
         }
+      } catch {}
+      try {
+        const imageModels = await readModels("/v1/image/models");
+        if (imageModels.length) return imageModels;
       } catch {}
       return [
         { id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] },
-        { id: "flux-kontext-apps/restore-image", name: "restore-image", tags: ["image-editing"] },
+        { id: "GPT-5.5", name: "GPT-5.5", tags: ["reasoning"] },
+        { id: "GPT-5.4", name: "GPT-5.4", tags: ["reasoning"] },
       ];
     },
     async processText(params) {
@@ -197,6 +238,7 @@ export const mockApi: ZhihuiApi = {
     },
     async set(settings: AppSettings) {
       Object.assign(mockSettings, settings);
+      persistSettings(mockSettings);
       return mockSettings;
     },
     async testApiKey(apiKey?: string, baseUrl?: string, mode: "models" | "image" | "reasoning" = "models") {
@@ -208,7 +250,16 @@ export const mockApi: ZhihuiApi = {
           body: JSON.stringify({ apiKey: apiKey || "", baseUrl: baseUrl || mockSettings.tokenFluxBaseUrl, mode }),
         });
         const payload = await response.json();
-        return { ok: response.ok, message: payload.message || payload.error || payload.detail || "连接失败" };
+        const models = Array.isArray(payload.models)
+          ? (payload.models as Array<{ id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }>)
+              .filter((item) => item.modelId || item.id)
+              .map((item) => ({
+                id: item.modelId || item.id || "gpt-image-2",
+                name: item.displayName || item.name || item.modelId || item.id || "GPT Image 2",
+                tags: Array.isArray(item.tags) && item.tags.length ? item.tags.map(String) : mode === "models" ? ["reasoning"] : ["image-editing"],
+              }))
+          : [];
+        return { ok: response.ok, message: payload.message || payload.error || payload.detail || "连接失败", models };
       } catch {
         return { ok: false, message: "连接失败：无法访问测试接口，请检查网络后重试" };
       }

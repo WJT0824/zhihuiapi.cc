@@ -1053,6 +1053,8 @@ export function App() {
   }
 
   const modelOptions = models.filter((model) => model.tags.includes("text-to-image") || model.tags.includes("image-editing"));
+  const reasoningModels = models.filter((model) => model.tags.includes("reasoning"));
+  const canvasModels = modelOptions.length || reasoningModels.length ? models : [{ id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] }];
 
   if (!user) {
     return (
@@ -1271,7 +1273,7 @@ export function App() {
         <InfiniteCanvas
           project={project}
           assets={assets}
-          models={modelOptions}
+          models={canvasModels}
           billingEnabled={billingEnabled}
           walletBalance={billingEnabled ? wallet?.balance ?? 0 : Number.MAX_SAFE_INTEGER}
           selectedNodeId={selectedNodeId}
@@ -1304,8 +1306,22 @@ export function App() {
         <SettingsModal
           open={settingsOpen}
           settings={settings}
-          models={modelOptions}
+          models={canvasModels}
           onClose={() => setSettingsOpen(false)}
+          onModelsRead={(nextModels) => {
+            setModels((current) => {
+              const seen = new Set<string>();
+              const merged: typeof current = [];
+              for (const model of [...current, ...nextModels]) {
+                if (!seen.has(model.id)) {
+                  seen.add(model.id);
+                  merged.push(model);
+                }
+              }
+              if (!seen.has("gpt-image-2")) merged.unshift({ id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] });
+              return merged;
+            });
+          }}
           onSave={async (next) => {
             const saved = await window.zhihui.settings.set(next);
             setSettings(saved);

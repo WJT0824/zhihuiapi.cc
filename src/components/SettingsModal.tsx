@@ -7,12 +7,14 @@ export function SettingsModal({
   models,
   onClose,
   onSave,
+  onModelsRead,
 }: {
   open: boolean;
   settings: AppSettings;
   models: TokenFluxModel[];
   onClose: () => void;
   onSave: (settings: AppSettings) => Promise<void>;
+  onModelsRead?: (models: TokenFluxModel[]) => void;
 }) {
   const [draft, setDraft] = useState(settings);
   const [testMessage, setTestMessage] = useState("");
@@ -27,6 +29,38 @@ export function SettingsModal({
   if (!open) return null;
 
   const set = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => setDraft((current) => ({ ...current, [key]: value }));
+  const mergedModels = (() => {
+    const seen = new Set<string>();
+    const all: TokenFluxModel[] = [];
+    for (const model of models) {
+      if (!seen.has(model.id)) {
+        seen.add(model.id);
+        all.push(model);
+      }
+    }
+    if (!seen.has(draft.defaultModel)) {
+      const currentIsImage = String(draft.defaultModel).toLowerCase() === "gpt-image-2";
+      seen.add(draft.defaultModel);
+      all.push({
+        id: draft.defaultModel,
+        name: currentIsImage ? "GPT Image 2" : draft.defaultModel,
+        tags: currentIsImage ? ["text-to-image", "image-editing"] : ["reasoning"],
+      });
+    }
+    if (!seen.has("gpt-image-2")) {
+      seen.add("gpt-image-2");
+      all.unshift({ id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] });
+    }
+    return all;
+  })();
+  const modelKind = (model: TokenFluxModel) => {
+    const isImage = model.tags.includes("text-to-image") || model.tags.includes("image-editing");
+    const isReasoning = model.tags.includes("reasoning");
+    if (isImage && isReasoning) return " · 图像/推理";
+    if (isImage) return " · 图像";
+    if (isReasoning) return " · 推理";
+    return "";
+  };
 
   return (
     <div className="modal-backdrop">
@@ -42,8 +76,9 @@ export function SettingsModal({
               type="password"
               value={draft.tokenFluxApiKey ?? ""}
               onChange={(event) => set("tokenFluxApiKey", event.target.value)}
-              placeholder="sk-..."
+              placeholder="留空时默认使用平台已配置服务"
             />
+            <small className="settings-hint">留空则无需每次输入，网页端自动使用平台默认 AI 服务。</small>
           </label>
           <label>
             API 中转地址
@@ -58,6 +93,7 @@ export function SettingsModal({
               onClick={async () => {
                 const result = await window.zhihui.settings.testApiKey(draft.tokenFluxApiKey, draft.tokenFluxBaseUrl, "models");
                 setTestMessage(result.message);
+                if (result.models?.length) onModelsRead?.(result.models);
               }}
             >
               测试连接
@@ -83,16 +119,14 @@ export function SettingsModal({
           <label>
             默认模型
             <select value={draft.defaultModel} onChange={(event) => set("defaultModel", event.target.value)}>
-              <option value="gpt-image-2">GPT Image 2</option>
-              {models
-                .filter((model) => model.id !== "gpt-image-2")
-                .slice(0, 8)
-                .map((model) => (
+              {mergedModels.slice(0, 30).map((model) => (
                   <option key={model.id} value={model.id}>
                     {model.name || model.id}
+                    {modelKind(model)}
                   </option>
                 ))}
             </select>
+            <small className="settings-hint">默认模型会同步给节点下拉框与实际生成任务；API 读取列表中的推理模型用于推理类节点。</small>
           </label>
           <div className="two-cols">
             <label>

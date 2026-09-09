@@ -39,6 +39,26 @@ export function Inspector({
         size: ratioToDefaultSize[ratio] ?? "1024x1024",
       },
     });
+  const currentModel = String(node.params.model ?? "gpt-image-2");
+  const modelChoices = (() => {
+    const seen = new Set<string>();
+    const all: TokenFluxModel[] = [];
+    for (const model of models) {
+      if (!seen.has(model.id)) {
+        seen.add(model.id);
+        all.push(model);
+      }
+    }
+    if (!seen.has(currentModel)) {
+      all.push({
+        id: currentModel,
+        name: currentModel === "gpt-image-2" ? "GPT Image 2" : currentModel,
+        tags: currentModel === "gpt-image-2" ? ["text-to-image", "image-editing"] : ["image-editing"],
+      });
+    }
+    if (!all.length) all.push({ id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] });
+    return all;
+  })();
 
   return (
     <div className="inspector-form">
@@ -64,13 +84,10 @@ export function Inspector({
         <>
           <label>
             模型
-            <select value={String(node.params.model ?? "gpt-image-2")} onChange={(event) => setParam("model", event.target.value)}>
-              <option value="gpt-image-2">GPT Image 2</option>
-              {models
-                .filter((model) => model.id !== "gpt-image-2")
-                .map((model) => (
+            <select value={currentModel} onChange={(event) => setParam("model", event.target.value)}>
+              {modelChoices.map((model) => (
                   <option key={model.id} value={model.id}>
-                    {model.id}
+                    {model.name || model.id}
                   </option>
                 ))}
             </select>
