@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
-import { existsSync, createReadStream, statSync } from 'node:fs';
+import { existsSync, createReadStream, createWriteStream, statSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
@@ -12,6 +12,8 @@ const DATA_DIR = process.env.ZH_DATA_DIR ? path.resolve(process.env.ZH_DATA_DIR)
 const DATA_FILE = path.join(DATA_DIR, 'store.json');
 const ASSET_DIR = path.join(DATA_DIR, 'assets');
 const REF_DIR = path.join(DATA_DIR, 'references');
+const DOWNLOAD_DIR = path.join(DATA_DIR, 'downloads');
+const PLUGIN_FILENAME = '郅绘CDR插件ai版-v1.4.0.exe';
 const ADMIN_KEY = process.env.ZH_ADMIN_KEY || 'dev-admin-2026';
 const PUBLIC_API_ORIGIN = (process.env.PUBLIC_API_ORIGIN || '').replace(/\/+$/, '');
 const AI_BASE_URL = (process.env.AI_BASE_URL || '').replace(/\/+$/, '');
@@ -31,6 +33,7 @@ async function load() {
   await mkdir(DATA_DIR, { recursive: true });
   await mkdir(ASSET_DIR, { recursive: true });
   await mkdir(REF_DIR, { recursive: true });
+  await mkdir(DOWNLOAD_DIR, { recursive: true });
   if (existsSync(DATA_FILE)) { try { store = JSON.parse(await readFile(DATA_FILE, 'utf8')); } catch { store = defaultStore(); } }
   store.tasks ||= []; store.redemptionCodes ||= []; store.redemptions ||= []; store.ledger ||= []; store.sessions ||= {}; store.references ||= []; store.jobs ||= []; store.assets ||= []; store.workflows ||= []; store.aiConfig ||= { baseUrl: '', apiKey: '', model: '' };
   if (!store.users.length) {

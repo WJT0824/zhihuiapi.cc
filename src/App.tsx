@@ -1074,9 +1074,9 @@ export function App() {
     <div className={`app-shell ${sidebarOpen ? "" : "sidebar-collapsed"} ${inspectorOpen ? "" : "inspector-collapsed"}`}>
       <header className="topbar">
         <div className="brand">
-          <div className="brand-mark">郅</div>
+          <img className="brand-mark" src="/logo.png" alt="郅绘" />
           <div>
-            <h1>郅绘ai画布</h1>
+            <h1>郅绘 AI 画布</h1>
             <p>{project?.title ?? "加载项目中..."}</p>
           </div>
         </div>
@@ -1353,9 +1353,9 @@ function AuthScreen({
     <main className="auth-screen">
       <section className="auth-panel">
         <div className="brand auth-brand">
-          <div className="brand-mark">郅</div>
+          <img className="brand-mark" src="/logo.png" alt="郅绘" />
           <div>
-            <h1>郅绘ai画布</h1>
+            <h1>郅绘 AI 画布</h1>
             <p>{mode === "register" ? "创建本地账号" : "登录本地账号"}</p>
           </div>
         </div>

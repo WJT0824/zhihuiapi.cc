@@ -67,9 +67,9 @@ function toast(message, tone) {
 function userInitial() { return state.user ? (state.user.nickname || state.user.username || '?' ).slice(0, 1).toUpperCase() : '?'; }
 function topbar(active) {
   const pages = state.user
-    ? [['studio', '创作台', '◇'], ['history', '任务历史', '◷'], ['wallet', '积分中心', '◇'], ['settings', '个人设置', '⚙'], state.user.role === 'admin' ? ['admin', '运营后台', '▣'] : null]
-    : [['home', '首页', '⌂']];
-  const links = (pages.filter(Boolean)).map(([p, name, ic]) => `<a href="${p === 'studio' ? '/canvas/' : '#' + p}" class="${active === p ? 'active' : ''}"><i>${ic}</i> <span>${name}</span></a>`).join('');
+    ? [['studio', '创作台', '◇'], ['history', '任务历史', '◷'], ['wallet', '积分中心', '◇'], ['settings', '个人设置', '⚙'], ['download', '下载插件', '⭳'], state.user.role === 'admin' ? ['admin', '运营后台', '▣'] : null]
+    : [['home', '首页', '⌂'], ['download', '下载插件', '⭳']];
+  const links = (pages.filter(Boolean)).map(([p, name, ic]) => `<a href="${p === 'download' ? '/downloads/' : '#' + p}" class="${active === p ? 'active' : ''}"><i>${ic}</i> <span>${name}</span></a>`).join('');
   return `<header class="topbar">
     <a class="brand" href="#studio"><img class="logo" src="/logo.png" alt="郅绘"><span><b>郅绘</b><small>AI DESIGN WORKSPACE</small></span></a>
     <nav class="topnav">${links}</nav>
@@ -436,7 +436,10 @@ async function render() {
   if (!state.user && ['studio', 'history', 'wallet', 'admin'].includes(state.page)) state.page = 'home';
   if (state.page === 'home' && !state.user) { APP.innerHTML = landing(); bindLanding(); return; }
   if (state.page === 'auth') { APP.innerHTML = authPage(); bindAuth(); return; }
-  if (state.page === 'studio') { APP.innerHTML = workspaceShell(studioPage(), 'studio'); bindCanvas(); bindInspectorEvents(); loadModels(); return; }
+  if (state.page === 'studio') {
+    APP.innerHTML = topbar('studio') + '<main class="canvas-embed"><iframe src="/canvas/?from=site" title="郅绘完整画布" allow="clipboard-read; clipboard-write"></iframe></main>';
+    return;
+  }
   if (state.page === 'history') { APP.innerHTML = await historyPage(); return; }
   if (state.page === 'wallet') { APP.innerHTML = walletPage(); bindWallet(); return; }
   if (state.page === 'settings') { APP.innerHTML = settingsPage(); bindSettings(); return; }

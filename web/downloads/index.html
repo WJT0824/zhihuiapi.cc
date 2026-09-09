@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>郅绘 CDR 插件下载</title>
+  <link rel="icon" href="/favicon.ico">
+  <style>
+    :root{--bg:#eef2f9;--card:#fff;--line:#dfe6f2;--ink:#17223b;--primary:#4f5dfa}
+    body{margin:0;font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink)}
+    .wrap{max-width:780px;margin:0 auto;padding:48px 22px}
+    .logo{display:flex;align-items:center;gap:12px;font-weight:800}
+    .logo img{width:38px;height:38px;border-radius:10px;box-shadow:0 8px 20px rgba(76,92,255,.22)}
+    h1{font-size:30px;margin:34px 0 8px}
+    .muted{color:#68748e}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:20px;box-shadow:0 18px 50px rgba(30,45,90,.12);padding:26px;margin-top:24px}
+    .card h2{margin:0 0 14px;font-size:18px}
+    .btn{display:inline-flex;align-items:center;gap:10px;background:linear-gradient(135deg,#4f5dfa,#6c3ef5);color:#fff;text-decoration:none;padding:14px 22px;border-radius:13px;font-weight:800;box-shadow:0 12px 28px rgba(79,93,250,.3);font-size:15px}
+    .btn.secondary{background:#fff;color:var(--primary);border:1px solid #b9c4ff;box-shadow:none;margin-left:10px}
+    .meta{margin-top:14px;color:#8a94a8;font-size:12px}
+    ol{line-height:1.9;padding-left:20px;color:#59657f}
+    code{background:#f1f3fb;border:1px solid #e1e6f3;padding:2px 6px;border-radius:6px;font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <a class="logo" href="/"><img src="/logo.png" alt="郅绘"><span>郅绘 / CDR 插件</span></a>
+    <h1>下载郅绘 CDR 插件</h1>
+    <p class="muted">插件默认连接郅绘平台服务地址：<strong>https://zhihuiapi.cc</strong>。账号、积分、AI 生成与工作流都通过该网站同步。</p>
+    <div class="card">
+      <h2>v1.4.0 网页下载版</h2>
+      <a class="btn" href="郅绘CDR插件-v1.4.0-web.zip" download>下载 ZIP 插件包</a>
+      <a class="btn secondary" href="郅绘CDR插件-v1.4.0-web.7z" download>下载 7Z 压缩包</a>
+      <div class="meta">ZIP 约 45 MB · 7Z 约 34 MB · 本页面仅包含 CorelDRAW 插件运行文件</div>
+    </div>
+    <div class="card">
+      <h2>安装说明</h2>
+      <ol>
+        <li>关闭 CorelDRAW。</li>
+        <li>解压下载包。</li>
+        <li>将压缩包内全部文件复制到：<code>C:\Program Files\Addons\CDRPluginAdmin\</code>，覆盖同名文件。</li>
+        <li>重新打开 CorelDRAW，在插件窗口选择“平台账号”，输入郅绘网站账号登录。</li>
+      </ol>
+      <p class="muted">若你已有旧版插件安装器，也可以继续使用，旧版插件同样默认指向 zhihuiapi.cc。</p>
+    </div>
+  </div>
+</body>
+</html>
