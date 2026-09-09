@@ -1363,7 +1363,6 @@ function AuthScreen({
           <button className={mode === "login" ? "active" : ""} onClick={() => onModeChange("login")}>登录</button>
           <button className={mode === "register" ? "active" : ""} onClick={() => onModeChange("register")}>注册</button>
         </div>
-        <p className="auth-note">本地账号用于保存项目和登录记忆，TokenFlux API Key 请在进入软件后的设置中配置。</p>
         <div className="auth-form">
           <label>
             昵称
