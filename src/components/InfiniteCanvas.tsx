@@ -328,6 +328,68 @@ export function InfiniteCanvas({
     });
   }
 
+  function autoArrangeAndGroupSelection() {
+    const selected = project.graph.nodes.filter((node) => multiSelectedIds.includes(node.id));
+    if (selected.length < 2) return;
+    const selectedIds = new Set(selected.map((node) => node.id));
+    const groupId = nanoid();
+    const depthCache = new Map<string, number>();
+    const resolveDepth = (nodeId: string, visiting = new Set<string>()): number => {
+      const cached = depthCache.get(nodeId);
+      if (cached !== undefined) return cached;
+      if (visiting.has(nodeId)) return 0;
+      visiting.add(nodeId);
+      let depth = 0;
+      for (const edge of project.graph.edges) {
+        if (edge.targetNode !== nodeId || !selectedIds.has(edge.sourceNode) || edge.sourceNode === nodeId) continue;
+        depth = Math.max(depth, resolveDepth(edge.sourceNode, visiting) + 1);
+      }
+      visiting.delete(nodeId);
+      depthCache.set(nodeId, depth);
+      return depth;
+    };
+    const layers = new Map<number, CanvasNode[]>();
+    for (const node of selected) {
+      const depth = resolveDepth(node.id);
+      const layer = layers.get(depth) ?? [];
+      layer.push(node);
+      layers.set(depth, layer);
+    }
+    const minX = Math.min(...selected.map((node) => node.position.x));
+    const minY = Math.min(...selected.map((node) => node.position.y));
+    const sortedDepths = [...layers.keys()].sort((a, b) => a - b);
+    const columnWidths: Record<number, number> = {};
+    const columnXs: Record<number, number> = {};
+    for (const depth of sortedDepths) {
+      columnWidths[depth] = Math.max(...(layers.get(depth) ?? []).map((node) => getVisualNodeSize(node).width));
+    }
+    let cursorX = Math.max(30, minX);
+    const gapX = 70;
+    for (const depth of sortedDepths) {
+      columnXs[depth] = cursorX;
+      cursorX += columnWidths[depth] + gapX;
+    }
+    const placed = new Map<string, { x: number; y: number }>();
+    const columnCursorY: Record<number, number> = {};
+    for (const depth of sortedDepths) {
+      const layer = [...(layers.get(depth) ?? [])].sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
+      columnCursorY[depth] = Math.max(30, minY);
+      const gapY = 90;
+      for (const node of layer) {
+        const size = getVisualNodeSize(node);
+        placed.set(node.id, { x: columnXs[depth], y: columnCursorY[depth] });
+        columnCursorY[depth] += size.height + gapY;
+      }
+    }
+    const arranged = project.graph.nodes.map((node) => {
+      const next = placed.get(node.id);
+      if (!next) return node;
+      return { ...node, groupId, position: next };
+    });
+    onChange({ ...project, graph: { ...project.graph, nodes: arranged } });
+    setMultiSelectedIds(selected.map((node) => node.id));
+  }
+
   function startNodeDrag(event: PointerEvent<HTMLElement>, node: CanvasNode) {
     const target = event.target as HTMLElement;
     if (event.button === 1) {
@@ -971,6 +1033,12 @@ export function InfiniteCanvas({
           onClick={(event) => event.stopPropagation()}
         >
           <span className="selection-count">已选 {selectionNodes.length} 个节点</span>
+          {selectionNodes.length >= 2 && (
+            <button className="selection-auto-layout" onClick={() => autoArrangeAndGroupSelection()}>
+              <Wand2 size={14} />
+              自动整理并组合
+            </button>
+          )}
           {selectionNodes.length >= 2 && !allInOneGroup && (
             <button onClick={() => groupMultiSelectedNodes()}>
               <Layers3 size={14} />

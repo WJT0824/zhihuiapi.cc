@@ -2297,3 +2297,12 @@ textarea:focus {
   border-color:#b9c4ff;
   color:#4f5dfa;
 }
+.canvas-selection-toolbar .selection-auto-layout {
+  background: linear-gradient(135deg, #4f5dfa, #6c3ef5);
+  border-color: transparent;
+  color:#fff;
+}
+.canvas-selection-toolbar .selection-auto-layout:hover {
+  background:#4f5dfa;
+  color:#fff;
+}
