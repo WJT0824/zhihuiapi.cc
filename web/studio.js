@@ -155,7 +155,7 @@ function nodeHtml(node) {
   const hasOut = ['prompt', 'image', 'generate', 'upscale', 'background'].includes(node.type);
   return `<article class="node${selected}" data-node="${node.id}" data-action="select-node" data-id="${node.id}" data-type="${node.type}" style="left:${node.x}px;top:${node.y}px">
     <div class="node-head"><span class="node-icon ${iconBg[node.type]}">${iconMap[node.type]}</span><span class="node-title">${node.title}</span>${statusBadge}</div>
-    <div class="ports">${hasIn ? '<i class="port in" data-port="in" data-node="' + node.id + '" title="输入"></i>' : ''}${hasOut ? '<i class="port out" data-port="out" data-node="' + node.id + '" title="输出"></i>' : ''}</div>
+    ${hasIn ? '<i class="port in" data-port="in" data-node="' + node.id + '" title="输入"></i>' : ''}${hasOut ? '<i class="port out" data-port="out" data-node="' + node.id + '" title="输出"></i>' : ''}
     <div class="node-body">${body}</div>
     ${['generate', 'upscale', 'background'].includes(node.type) ? '<div class="node-actions"><button class="mini-btn" data-action="run-node" data-id="' + node.id + '">▶ ' + (node.type === 'upscale' ? '高清放大' : node.type === 'background' ? '处理' : '生成') + '</button></div>' : ''}
     <div class="node-actions"><button class="mini-btn" data-action="select-node" data-id="${node.id}">编辑节点</button></div>
@@ -188,6 +188,27 @@ function redrawCanvas() {
     }
   }
   world.innerHTML = `<svg class="edge-svg" viewBox="0 0 1800 1100" preserveAspectRatio="none"><defs><linearGradient id="edgeGradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#ff8a73"/><stop offset="55%" stop-color="#5a4cf4"/><stop offset="100%" stop-color="#14b8d4"/></linearGradient></defs>${edgeMarkup}${ghost}</svg>` + state.nodes.map(nodeHtml).join('');
+  world.querySelectorAll('.port').forEach((port) => {
+    port.addEventListener('click', (e) => handlePortClick(port.dataset.node, port.dataset.port, e));
+  });
+}
+
+function handlePortClick(nodeId, kind, e) {
+  if (e) { e.preventDefault(); e.stopPropagation(); }
+  const node = state.nodes.find((n) => n.id === nodeId); if (!node) return;
+  const viewport = $('#canvas-viewport');
+  if (kind === 'out') {
+    state.connecting = state.connecting && state.connecting.source === nodeId ? null : { source: nodeId, x: node.x + 222, y: node.y + 52 };
+    redrawCanvas();
+    if (state.connecting) openConnectionMenu(e.clientX, e.clientY, nodeId);
+    else closeConnectionMenu();
+  } else if (kind === 'in' && state.connecting && state.connecting.source !== nodeId) {
+    const exists = state.edges.some((edge) => edge.source === state.connecting.source && edge.target === nodeId);
+    if (!exists) state.edges.push({ id: 'edge-' + Date.now(), source: state.connecting.source, target: nodeId });
+    state.connecting = null;
+    closeConnectionMenu();
+    redrawCanvas();
+  }
 }
 
 function redrawEdgesOnly() {
@@ -220,8 +241,13 @@ function studioPage() {
     <div class="canvas-wrap">
       <div class="canvas-grid"></div>
       <div class="canvas-viewport" id="canvas-viewport"><div class="world" id="canvas-world"></div></div>
+      <div class="canvas-floating-tools">
+        <button class="mini-btn" data-action="layout-flow" data-mode="auto" title="智能整理节点">⇶ 自动整理</button>
+        <button class="mini-btn" data-action="toggle-rail" title="展开/收起节点库">◧ 节点库</button>
+        <button class="mini-btn" data-action="toggle-inspector" title="展开/收起属性">▤ 属性</button>
+      </div>
     </div>
-    <aside class="inspector open" id="inspector">${inspectorHtml(sel)}</aside>
+    <aside class="inspector" id="inspector">${inspectorHtml(sel)}</aside>
   </section>`;
 }
 
@@ -294,7 +320,7 @@ function settingsPage() {
   const saved = Object.assign({}, profile.settings || {}, state.settings);
   const values = {
     nickname: state.user.displayName || state.user.nickname || '',
-    defaultModel: saved.defaultModel || 'gpt-image-2',
+    defaultModel: saved.defaultModel === '平台图像模型' ? 'gpt-image-2' : (saved.defaultModel || 'gpt-image-2'),
     defaultRatio: saved.defaultRatio || '1:1',
     defaultResolution: saved.defaultResolution || '1K',
     defaultQuality: saved.defaultQuality || 'auto',
@@ -430,21 +456,8 @@ function bindCanvas() {
   });
   viewport.addEventListener('click', (e) => {
     const port = e.target.closest('.port');
-    if (!port) { if (state.connecting) { state.connecting = null; redrawCanvas(); } return; }
-    const nodeId = port.dataset.node; const kind = port.dataset.port;
-    const node = state.nodes.find((n) => n.id === nodeId);
-    const rect = viewport.getBoundingClientRect();
-    const worldX = (e.clientX - rect.left - state.camera.x) / state.camera.zoom;
-    const worldY = (e.clientY - rect.top - state.camera.y) / state.camera.zoom;
-    if (kind === 'out') {
-      state.connecting = state.connecting && state.connecting.source === nodeId ? null : { source: nodeId, x: node.x + 222, y: node.y + 52 };
-      redrawCanvas();
-    } else if (kind === 'in' && state.connecting && state.connecting.source !== nodeId) {
-      const exists = state.edges.some((edge) => edge.source === state.connecting.source && edge.target === nodeId);
-      if (!exists) state.edges.push({ id: 'edge-' + Date.now(), source: state.connecting.source, target: nodeId });
-      state.connecting = null;
-      redrawCanvas();
-    }
+    if (port) return;
+    if (state.connecting) { state.connecting = null; closeConnectionMenu(); redrawCanvas(); }
   });
   viewport.addEventListener('pointerdown', (e) => {
     const target = e.target.closest('.node');
@@ -598,6 +611,50 @@ function createUpscaleWorkflow(preset) {
 }
 
 function closeContextMenu() { const menu = $('#node-context-menu'); if (menu) menu.remove(); }
+function closeConnectionMenu() { const menu = $('#connection-menu'); if (menu) menu.remove(); }
+
+function openConnectionMenu(x, y, sourceId) {
+  closeConnectionMenu();
+  const source = state.nodes.find((n) => n.id === sourceId);
+  if (!source) return;
+  const candidates = state.nodes.filter((target) => {
+    if (target.id === sourceId) return false;
+    if (!['generate', 'upscale', 'background', 'output'].includes(target.type)) return false;
+    return !state.edges.some((edge) => edge.source === sourceId && edge.target === target.id);
+  });
+  const menu = document.createElement('div');
+  menu.id = 'connection-menu';
+  menu.style.cssText = 'position:fixed;z-index:180;min-width:220px;max-height:320px;overflow:auto;background:#fff;border:1px solid #dfe6f2;border-radius:14px;box-shadow:0 18px 54px rgba(25,35,70,.22);padding:7px;font-size:13px';
+  const head = document.createElement('div');
+  head.textContent = '连接到 ' + (source.title || source.type);
+  head.style.cssText = 'font-size:11px;font-weight:800;letter-spacing:.08em;color:#9aa6bf;padding:6px 9px 9px';
+  menu.appendChild(head);
+  if (!candidates.length) {
+    const empty = document.createElement('div');
+    empty.textContent = '没有可连接的目标节点';
+    empty.style.cssText = 'padding:8px 9px;color:#8a94a8';
+    menu.appendChild(empty);
+  } else {
+    candidates.forEach((target) => {
+      const b = document.createElement('button');
+      b.style.cssText = 'display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:9px;border:0;border-radius:10px;background:transparent;font-weight:650;color:#3d4865';
+      b.innerHTML = `<span class="node-icon ${iconBg[target.type]}" style="width:24px;height:24px;border-radius:8px;font-size:11px">${iconMap[target.type]}</span><span>${esc(target.title)}<small style="display:block;color:#98a2b8;font-weight:500;font-size:11px">${target.type === 'generate' ? 'AI 图像生成' : target.type === 'upscale' ? '高清放大' : target.type === 'output' ? '结果输出' : '图像处理'}</small></span>`;
+      b.addEventListener('mouseenter', () => { b.style.background = '#eef1ff'; });
+      b.addEventListener('mouseleave', () => { b.style.background = ''; });
+      b.addEventListener('click', () => {
+        state.edges.push({ id: 'edge-' + Date.now() + '-' + Math.random().toString(36).slice(2, 5), source: sourceId, target: target.id });
+        state.connecting = null;
+        closeConnectionMenu();
+        redrawCanvas();
+        toast('已自动连接：' + source.title + ' → ' + target.title, 'ok');
+      });
+      menu.appendChild(b);
+    });
+  }
+  menu.style.left = Math.min(x + 12, window.innerWidth - 240) + 'px';
+  menu.style.top = Math.min(y + 12, window.innerHeight - menu.offsetHeight - 12) + 'px';
+  document.body.appendChild(menu);
+}
 
 function openContextMenu(x, y, nodeId) {
   closeContextMenu();
@@ -682,6 +739,24 @@ function resetFlow() {
   ];
   state.selected = 'n-generate'; state.camera = { x: 20, y: 10, zoom: 1 };
   redrawCanvas(); const inspector = $('#inspector'); if (inspector) inspector.innerHTML = inspectorHtml(state.nodes.find((n) => n.id === state.selected)); bindInspectorEvents();
+}
+
+function layoutFlow(mode) {
+  const inputs = state.nodes.filter((n) => ['prompt', 'image'].includes(n.type));
+  const processors = state.nodes.filter((n) => ['generate', 'upscale', 'background'].includes(n.type));
+  const outputs = state.nodes.filter((n) => n.type === 'output');
+  const groups = [inputs, processors, outputs];
+  let cursorX = 60;
+  groups.forEach((group) => {
+    group.forEach((node, index) => {
+      node.x = cursorX;
+      node.y = 120 + index * 190;
+    });
+    cursorX += 360;
+  });
+  state.camera = { x: 20, y: 10, zoom: state.camera.zoom };
+  redrawCanvas();
+  toast('节点布局已自动整理', 'ok');
 }
 
 async function runNode(nodeId) {
@@ -844,6 +919,9 @@ function bindDelegated() {
       if (action === 'open-settings') { state.page = 'settings'; location.hash = 'settings'; render(); }
       if (action === 'add-node') addNode(actionEl.dataset.type);
       if (action === 'upscale-workflow') createUpscaleWorkflow(actionEl.dataset.preset || actionEl.dataset.menuId || '4k');
+      if (action === 'layout-flow') layoutFlow(actionEl.dataset.mode || 'auto');
+      if (action === 'toggle-rail') { const wb = document.querySelector('.workbench'); if (wb) wb.classList.toggle('rail-hidden'); }
+      if (action === 'toggle-inspector') { const insp = $('#inspector'); if (insp) insp.classList.toggle('open'); }
       if (action === 'select-node') { state.selected = actionEl.dataset.id; const node = state.nodes.find((n) => n.id === state.selected); redrawCanvas(); const inspector = $('#inspector'); if (inspector) inspector.innerHTML = inspectorHtml(node); bindInspectorEvents(); }
       if (action === 'delete-node') deleteNode(actionEl.dataset.id);
       if (action === 'run-node') runNode(actionEl.dataset.id);
@@ -875,5 +953,8 @@ function openPreview(url) {
 window.addEventListener('hashchange', () => { state.page = location.hash.slice(1) || 'home'; render(); });
 bindDelegated();
 document.addEventListener('click', closeContextMenu);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeContextMenu(); });
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#connection-menu, .port')) closeConnectionMenu();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeContextMenu(); closeConnectionMenu(); } });
 render();

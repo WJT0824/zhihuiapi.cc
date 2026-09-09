@@ -48,6 +48,10 @@ a{color:inherit}
 .c-prompt{background:#fff3ee;color:#d65a44}.c-image{background:#e7fbff;color:#0095ad}.c-generate{background:#ececff;color:#5a4cf4}.c-output{background:#e8fbf2;color:#07996c}
 .quick-help{margin-top:26px;padding:13px;border-radius:14px;background:#f5f7ff;color:#6b7693;font-size:12.5px;line-height:1.65}
 .canvas-wrap{position:relative;overflow:hidden;min-width:0;border:1px solid var(--line);border-radius:18px;background:#fff;box-shadow:var(--shadow-sm)}
+.canvas-floating-tools{position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:40;display:flex;gap:6px;padding:5px;border-radius:13px;background:rgba(255,255,255,.92);backdrop-filter:blur(10px);border:1px solid var(--line);box-shadow:0 8px 24px rgba(30,45,90,.10)}
+.workbench.rail-hidden{grid-template-columns:minmax(0,1fr) 326px !important}.workbench.rail-hidden .rail{display:none !important}
+.workbench.inspector-hidden{grid-template-columns:238px minmax(0,1fr) !important}.workbench.inspector-hidden .inspector{display:none !important}
+.workbench.rail-hidden.inspector-hidden{grid-template-columns:minmax(0,1fr) !important}
 .canvas-grid{position:absolute;inset:0;background-color:#fbfcff;background-image:radial-gradient(#d4dded 1px,transparent 1.4px);background-size:24px 24px}
 .canvas-viewport{position:absolute;inset:0;cursor:grab;touch-action:none}
 .canvas-viewport.panning{cursor:grabbing}
@@ -59,7 +63,6 @@ a{color:inherit}
 .node:hover{box-shadow:var(--shadow)}
 .node.selected{border-color:var(--primary);box-shadow:0 12px 34px rgba(79,93,250,.2)}
 .node.dragging{cursor:grabbing;box-shadow:0 24px 60px rgba(30,45,90,.2);transform:scale(1.02)}
-.node .ports{position:absolute;inset:0;pointer-events:none}
 .node .port{position:absolute;top:47px;width:14px;height:14px;border-radius:50%;border:3px solid #fff;background:#9ba7ff;box-shadow:0 2px 7px rgba(40,50,130,.25);cursor:crosshair;pointer-events:auto;transition:.16s}
 .node .port:hover{transform:scale(1.35);background:#4f5dfa}
 .node .port.in{left:-7px}.node .port.out{right:-7px}
