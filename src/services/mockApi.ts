@@ -199,8 +199,19 @@ export const mockApi: ZhihuiApi = {
       Object.assign(mockSettings, settings);
       return mockSettings;
     },
-    async testApiKey() {
-      return { ok: false, message: "浏览器预览模式未连接 Electron IPC。" };
+    async testApiKey(apiKey?: string, baseUrl?: string, mode: "models" | "image" | "reasoning" = "models") {
+      try {
+        const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
+        const response = await fetch(`${apiOrigin}/v1/ai/test-connection`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ apiKey: apiKey || "", baseUrl: baseUrl || mockSettings.tokenFluxBaseUrl, mode }),
+        });
+        const payload = await response.json();
+        return { ok: response.ok, message: payload.message || payload.error || payload.detail || "连接失败" };
+      } catch {
+        return { ok: false, message: "连接失败：无法访问测试接口，请检查网络后重试" };
+      }
     },
   },
 };

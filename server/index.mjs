@@ -269,6 +269,21 @@ async function gateway(req, res, pathName) {
     const accessToken = uid(); store.sessions[hash(accessToken)] = { userId: user.id, kind: 'access', createdAt: now() }; await persist();
     return send(res, 200, { success: true, access_token: accessToken });
   }
+  if (req.method === 'POST' && pathName === '/v1/ai/test-connection') {
+    const apiKey = String(body.apiKey || '').trim();
+    let baseUrl = String(body.baseUrl || '').trim().replace(/\/+$/, '').replace(/\/v\d+$/i, '');
+    const mode = String(body.mode || 'models');
+    if (!apiKey || !baseUrl) return fail(400, '请输入 API Key 和服务地址');
+    try {
+      const endpoint = mode === 'reasoning' ? '/v1/chat/completions' : '/v1/models';
+      const response = await fetch(baseUrl + endpoint, { headers: { authorization: `Bearer ${apiKey}` } });
+      if (response.ok) return send(res, 200, { success: true, message: mode === 'reasoning' ? '推理模型连接成功' : 'API 连接成功，已读取模型列表' });
+      const text = await response.text();
+      return fail(400, `连接失败（${response.status}）：${text.slice(0, 180)}`);
+    } catch (error) {
+      return fail(400, `连接失败：${String(error.message || error).slice(0, 180)}`);
+    }
+  }
   const user = tokenUser(req);
   if (!user) return fail(401, '请先登录平台账号');
   if (req.method === 'GET' && pathName === '/v1/account') return send(res, 200, { success: true, user: safeUser(user) });
