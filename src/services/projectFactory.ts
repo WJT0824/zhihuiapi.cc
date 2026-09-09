@@ -37,14 +37,14 @@ export function createTemplateNode(template: TemplateDefinition, x = 120, y = 12
 
 export function createNode(type: CanvasNode["type"], x = 160, y = 160): CanvasNode {
   const titles: Record<CanvasNode["type"], string> = {
-    prompt: "文本节点",
-    image: "图像节点",
-    "ai-generate": "图像生成节点",
+    prompt: "提示词节点",
+    image: "参考图节点",
+    "ai-generate": "AI 生成节点",
     upscale: "高清放大节点",
     resize: "修改尺寸节点",
     background: "背景替换节点",
-    preview: "图像预览节点",
-    compare: "图像对比节点",
+    preview: "输出节点",
+    compare: "对比节点",
     "ecommerce-template": "电商模板节点",
     "print-template": "平面广告模板节点",
   };

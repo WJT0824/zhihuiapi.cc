@@ -69,7 +69,7 @@ function topbar(active) {
   const pages = state.user
     ? [['studio', '创作台', '◇'], ['history', '任务历史', '◷'], ['wallet', '积分中心', '◇'], ['settings', '个人设置', '⚙'], state.user.role === 'admin' ? ['admin', '运营后台', '▣'] : null]
     : [['home', '首页', '⌂']];
-  const links = (pages.filter(Boolean)).map(([p, name, ic]) => `<a href="#${p}" class="${active === p ? 'active' : ''}"><i>${ic}</i> <span>${name}</span></a>`).join('');
+  const links = (pages.filter(Boolean)).map(([p, name, ic]) => `<a href="${p === 'studio' ? '/canvas/' : '#' + p}" class="${active === p ? 'active' : ''}"><i>${ic}</i> <span>${name}</span></a>`).join('');
   return `<header class="topbar">
     <a class="brand" href="#studio"><img class="logo" src="/logo.png" alt="郅绘"><span><b>郅绘</b><small>AI DESIGN WORKSPACE</small></span></a>
     <nav class="topnav">${links}</nav>

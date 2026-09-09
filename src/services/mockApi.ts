@@ -3,6 +3,13 @@ import type { ZhihuiApi } from "@/types/preload";
 import type { AppSettings, BillingLedgerEntry, GenerateImageResult, LocalUser, WalletState, ZhihuiProject } from "@/types/domain";
 
 const now = () => new Date().toISOString();
+const webIdentity = (() => {
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem("zh_user") : null;
+    if (raw) { const user = JSON.parse(raw); return { nickname: user.nickname || user.username || "", points: Number(user.points ?? user.credits ?? 100) || 100 }; }
+  } catch {}
+  return { nickname: "本地用户", points: 100 };
+})();
 
 const mockSettings: AppSettings = {
   defaultModel: "gpt-image-2",
@@ -15,15 +22,15 @@ const projects = new Map<string, ZhihuiProject>();
 const tasks = new Map<string, GenerateImageResult>();
 let mockUser: LocalUser | undefined = {
   id: "mock-user",
-  nickname: "本地用户",
-  phone: "本地用户",
+  nickname: webIdentity.nickname,
+  phone: webIdentity.nickname,
   createdAt: now(),
 };
 let rememberedCredentials: { nickname: string; password: string } | undefined = {
-  nickname: "本地用户",
+  nickname: webIdentity.nickname,
   password: "123456",
 };
-let wallet: WalletState = { userId: "mock-user", balance: 100, updatedAt: now() };
+let wallet: WalletState = { userId: "mock-user", balance: webIdentity.points, updatedAt: now() };
 let ledger: BillingLedgerEntry[] = [];
 
 function createMockProject(title = "浏览器预览项目"): ZhihuiProject {

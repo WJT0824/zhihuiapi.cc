@@ -39,26 +39,26 @@ const contextNodeGroups: ContextNodeGroup[] = [
     key: "basic",
     label: "基础控件",
     items: [
-      { key: "smart-chat", type: "prompt", label: "智能对话", Icon: MessageSquare, preset: { title: "智能对话", params: { tool: "chat" } } },
-      { key: "polish-prompt", type: "prompt", label: "美化提示", Icon: WandSparkles, preset: { title: "美化提示", params: { tool: "polish-prompt" } } },
-      { key: "reverse-prompt", type: "prompt", label: "反推提示", Icon: ArrowLeftRight, preset: { title: "反推提示", params: { tool: "reverse-prompt" } } },
+      { key: "smart-chat", type: "prompt", label: "智能提示", Icon: MessageSquare, preset: { title: "智能提示", params: { tool: "chat" } } },
+      { key: "polish-prompt", type: "prompt", label: "提示润色", Icon: WandSparkles, preset: { title: "提示润色", params: { tool: "polish-prompt" } } },
+      { key: "reverse-prompt", type: "prompt", label: "提示分析", Icon: ArrowLeftRight, preset: { title: "提示分析", params: { tool: "reverse-prompt" } } },
     ],
   },
   {
     key: "generation",
     label: "AI 图像生成",
     items: [
-      { key: "image-generation", type: "ai-generate", label: "图片生成", Icon: Sparkles, preset: { title: "图片生成", params: { tool: "image-generation" } } },
-      { key: "image-video", type: "ai-generate", label: "图生视频", Icon: Video, preset: { title: "图生视频", params: { tool: "image-video", unsupportedFeature: "video" } } },
+      { key: "image-generation", type: "ai-generate", label: "AI 生成", Icon: Sparkles, preset: { title: "AI 生成", params: { tool: "image-generation" } } },
+      { key: "image-video", type: "ai-generate", label: "AI 视频", Icon: Video, preset: { title: "AI 视频", params: { tool: "image-video", unsupportedFeature: "video" } } },
     ],
   },
   {
     key: "processing",
     label: "图像处理",
     items: [
-      { key: "restore-4k", type: "upscale", label: "4K修复", Icon: ImagePlus, preset: { title: "4K修复", params: { tool: "restore-4k", factor: 2, resolution: "4K", prompt: "高质量修复图片，恢复细节、纹理和清晰度，保持主体与构图不变" } } },
-      { key: "upscale-8k", type: "upscale", label: "8K超分", Icon: Maximize2, preset: { title: "8K超分", params: { tool: "upscale-8k", factor: 4, resolution: "4K", prompt: "进行8K级超分辨率处理，保留真实细节，不改变主体和构图" } } },
-      { key: "remove-background", type: "background", label: "AI抠图", Icon: Scissors, preset: { title: "AI抠图", params: { tool: "remove-background", prompt: "精准抠出主体，去除背景，保留边缘细节并输出透明感干净的主体图" } } },
+      { key: "restore-4k", type: "upscale", label: "高清修复", Icon: ImagePlus, preset: { title: "高清修复", params: { tool: "restore-4k", factor: 2, resolution: "4K", prompt: "高质量修复图片，恢复细节、纹理和清晰度，保持主体与构图不变" } } },
+      { key: "upscale-8k", type: "upscale", label: "超清放大", Icon: Maximize2, preset: { title: "超清放大", params: { tool: "upscale-8k", factor: 4, resolution: "4K", prompt: "进行8K级超分辨率处理，保留真实细节，不改变主体和构图" } } },
+      { key: "remove-background", type: "background", label: "智能抠图", Icon: Scissors, preset: { title: "智能抠图", params: { tool: "remove-background", prompt: "精准抠出主体，去除背景，保留边缘细节并输出透明感干净的主体图" } } },
       { key: "color-adjust", type: "background", label: "色彩调整", Icon: Palette, preset: { title: "色彩调整", params: { tool: "color-adjust", prompt: "在保留主体、构图和细节的前提下，按照用户补充要求进行专业色彩调整，优化曝光、白平衡、对比度、饱和度和色彩层次" } } },
       { key: "image-transform", type: "resize", label: "图像变换", Icon: RefreshCw, preset: { title: "图像变换", params: { tool: "image-transform", prompt: "根据用户补充要求对参考图进行图像变换，保持主体身份和重要细节不变" } } },
       { key: "long-image", type: "resize", label: "长图合成", Icon: Layers3, preset: { title: "长图合成", params: { tool: "long-image", ratio: "9:21", prompt: "将接入的多张参考图按照统一视觉风格、清晰层级和连续阅读顺序合成为一张完整长图" } } },
@@ -68,8 +68,8 @@ const contextNodeGroups: ContextNodeGroup[] = [
 ];
 
 const contextInputItems: ContextNodeItem[] = [
-  { key: "text-input", type: "prompt", label: "文本输入", Icon: Text, preset: { title: "文本输入" } },
-  { key: "image-input", type: "image", label: "图片输入", Icon: Image, preset: { title: "图片输入" } },
+  { key: "text-input", type: "prompt", label: "提示词输入", Icon: Text, preset: { title: "提示词输入" } },
+  { key: "image-input", type: "image", label: "参考图输入", Icon: Image, preset: { title: "参考图输入" } },
 ];
 
 const ratioOptions = ["16:9", "9:16", "4:3", "3:4", "2:3", "3:2", "1:1", "21:9", "9:21", "9:20", "20:9", "auto", "custom"];
