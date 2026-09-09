@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 import type { ZhihuiApi } from "@/types/preload";
 import type { AppSettings, BillingLedgerEntry, GenerateImageResult, LocalUser, WalletState, ZhihuiProject } from "@/types/domain";
+import { createNode } from "@/services/projectFactory";
 
 const now = () => new Date().toISOString();
 const webIdentity = (() => {
@@ -35,6 +36,13 @@ let ledger: BillingLedgerEntry[] = [];
 
 function createMockProject(title = "浏览器预览项目"): ZhihuiProject {
   const createdAt = now();
+  const image = createNode("image", 40, 240);
+  const prompt = createNode("prompt", 40, 480);
+  prompt.params.prompt = "基于上传商品图生成高级电商主图，主体清晰、卖点明确、商业摄影质感";
+  const generate = createNode("ai-generate", 520, 260);
+  generate.params.ratio = "1:1";
+  generate.params.size = "1024x1024";
+  const preview = createNode("preview", 1030, 220);
   const project: ZhihuiProject = {
     version: 1,
     id: nanoid(),
@@ -42,8 +50,12 @@ function createMockProject(title = "浏览器预览项目"): ZhihuiProject {
     createdAt,
     updatedAt: createdAt,
     graph: {
-      nodes: [],
-      edges: [],
+      nodes: [image, prompt, generate, preview],
+      edges: [
+        { id: nanoid(), sourceNode: image.id, sourcePort: "image", targetNode: generate.id, targetPort: "image" },
+        { id: nanoid(), sourceNode: prompt.id, sourcePort: "prompt", targetNode: generate.id, targetPort: "prompt" },
+        { id: nanoid(), sourceNode: generate.id, sourcePort: "image", targetNode: preview.id, targetPort: "image" },
+      ],
       viewport: { x: 0, y: 0, zoom: 1 },
       background: "light",
     },
