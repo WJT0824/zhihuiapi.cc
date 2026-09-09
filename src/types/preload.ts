@@ -30,6 +30,7 @@ export interface ZhihuiApi {
   };
   assets: {
     import(projectId?: string): Promise<AssetRecord[]>;
+    importFiles?(projectId?: string, files?: File[]): Promise<AssetRecord[]>;
     list(projectId?: string): Promise<AssetRecord[]>;
     rename(assetId: string, name: string): Promise<AssetRecord>;
     composeSheet(assetIds: string[], projectId?: string, sourceNodeId?: string): Promise<AssetRecord>;

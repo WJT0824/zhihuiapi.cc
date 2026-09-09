@@ -541,6 +541,35 @@ export function App() {
     setStatus(imageAssets.length ? `已导入 ${imageAssets.length} 张图片` : "已导入素材，但没有图片文件");
   }
 
+  async function importImageFiles(files: File[], position: { x: number; y: number }) {
+    if (!project || !files.length) return;
+    const imported = window.zhihui.assets.importFiles ? await window.zhihui.assets.importFiles(project.id, files) : [];
+    const imageAssets = imported.filter((asset) => asset.type === "image");
+    if (!imageAssets.length) {
+      setStatus("未识别到图片，请拖入或粘贴 PNG/JPG/WebP 等图片");
+      return;
+    }
+    const nodes = imageAssets.map((asset, index) => ({
+      ...createNode("image", position.x + index * 36, position.y + index * 36),
+      title: "图片节点",
+      params: { assetId: asset.id },
+      status: "completed" as const,
+      resultAssetIds: [asset.id],
+    }));
+    const next = {
+      ...project,
+      graph: {
+        ...project.graph,
+        nodes: [...project.graph.nodes, ...nodes],
+      },
+    };
+    setProject(next);
+    setSelectedNodeId(nodes[0]?.id);
+    await window.zhihui.projects.save(next);
+    await refreshAssets(project.id);
+    setStatus(`已导入 ${imageAssets.length} 张图片`);
+  }
+
   function addWorkflow(workflowId: string) {
     if (!project) return;
     const workflow = workflowDefinitions.find((item) => item.id === workflowId);
@@ -1289,6 +1318,7 @@ export function App() {
           onRunNode={(node) => void runAiNode(node)}
           onAddNodeAt={addNodeAt}
           onImportImageAt={(position, connection) => void importImageAt(position, connection)}
+          onImportImageFiles={(files, position) => importImageFiles(files, position)}
           onImportImageIntoNode={(nodeId) => void importImageIntoNode(nodeId)}
           onAddAssetToCanvas={(asset, position) => void addAssetToCanvas(asset, position)}
           onDeleteAsset={(asset) => void deleteAsset(asset)}

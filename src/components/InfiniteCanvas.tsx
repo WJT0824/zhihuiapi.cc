@@ -141,6 +141,7 @@ interface InfiniteCanvasProps {
   onRunNode: (node: CanvasNode) => void;
   onAddNodeAt: (type: CanvasNode["type"], position: { x: number; y: number }, connection?: ConnectionDraft, preset?: ContextNodePreset) => void;
   onImportImageAt: (position: { x: number; y: number }, connection?: ConnectionDraft) => void;
+  onImportImageFiles?: (files: File[], position: { x: number; y: number }) => void | Promise<void>;
   onImportImageIntoNode: (nodeId: string) => void;
   onAddAssetToCanvas: (asset: AssetRecord, position?: { x: number; y: number }) => void;
   onDeleteAsset: (asset: AssetRecord) => void;
@@ -160,6 +161,7 @@ export function InfiniteCanvas({
   onRunNode,
   onAddNodeAt,
   onImportImageAt,
+  onImportImageFiles,
   onImportImageIntoNode,
   onAddAssetToCanvas,
   onDeleteAsset,
@@ -791,6 +793,32 @@ export function InfiniteCanvas({
         setMarqueeRect(undefined);
         marqueeRectRef.current = undefined;
         setConnecting(undefined);
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        const files = Array.from(event.dataTransfer.files ?? []).filter((file) => file.type.startsWith("image/"));
+        if (files.length && onImportImageFiles) {
+          const point = toWorld(event.clientX, event.clientY);
+          void onImportImageFiles(files, { x: point.worldX, y: point.worldY });
+        }
+      }}
+      onPaste={(event) => {
+        const clipboardFiles = Array.from(event.clipboardData?.items ?? [])
+          .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+          .map((item) => item.getAsFile())
+          .filter((file): file is File => Boolean(file));
+        const directFiles = Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
+        const files = [...new Map([...directFiles, ...clipboardFiles].map((file) => [file.name + file.size, file])).values()];
+        if (files.length && onImportImageFiles) {
+          event.preventDefault();
+          const rect = canvasRef.current?.getBoundingClientRect();
+          const point = toWorld((rect?.left ?? 0) + (rect?.width ?? 0) / 2, (rect?.top ?? 0) + (rect?.height ?? 0) / 2);
+          void onImportImageFiles(files, { x: point.worldX, y: point.worldY });
+        }
       }}
     >
       <div className="canvas-grid" />

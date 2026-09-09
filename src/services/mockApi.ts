@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import type { ZhihuiApi } from "@/types/preload";
-import type { AppSettings, BillingLedgerEntry, GenerateImageResult, LocalUser, WalletState, ZhihuiProject } from "@/types/domain";
+import type { AppSettings, AssetRecord, BillingLedgerEntry, GenerateImageResult, LocalUser, WalletState, ZhihuiProject } from "@/types/domain";
 
 const now = () => new Date().toISOString();
 const webIdentity = (() => {
@@ -37,9 +37,31 @@ const persistSettings = (settings: AppSettings) => {
     if (typeof localStorage !== "undefined") localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
   } catch {}
 };
+function createBrowserImageAsset(file: File, projectId?: string): AssetRecord | undefined {
+  if (!file.type.startsWith("image/")) return undefined;
+  const id = nanoid();
+  const path = typeof URL !== "undefined" && typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : "";
+  const asset: AssetRecord = {
+    id,
+    projectId,
+    type: "image",
+    name: file.name || `图片-${id.slice(0, 6)}.png`,
+    path,
+    tags: ["image"],
+    favorite: false,
+    sourceNodeId: undefined,
+    metadata: { size: file.size, mimeType: file.type, uploadedAt: now() },
+    createdAt: now(),
+  };
+  const list = assetStore.get(projectId ?? "") ?? [];
+  list.push(asset);
+  assetStore.set(projectId ?? "", list);
+  return asset;
+}
 
 const projects = new Map<string, ZhihuiProject>();
 const tasks = new Map<string, GenerateImageResult>();
+const assetStore = new Map<string, AssetRecord[]>();
 let mockUser: LocalUser | undefined = {
   id: "mock-user",
   nickname: webIdentity.nickname,
@@ -123,19 +145,55 @@ export const mockApi: ZhihuiApi = {
     },
   },
   assets: {
-    async import() {
-      return [];
+    async import(projectId) {
+      if (typeof document === "undefined") return [];
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "image/*";
+      input.multiple = true;
+      input.style.display = "none";
+      document.body.appendChild(input);
+      const files = await new Promise<File[]>((resolve) => {
+        input.onchange = () => resolve(Array.from(input.files ?? []));
+        input.click();
+      }).finally(() => input.remove());
+      if (!files.length) return [];
+      return files.map((file) => createBrowserImageAsset(file, projectId)).filter((asset): asset is AssetRecord => Boolean(asset));
     },
-    async list() {
-      return [];
+    async importFiles(projectId, files) {
+      if (!files || !Array.isArray(files)) return [];
+      return files.map((file) => createBrowserImageAsset(file, projectId)).filter((asset): asset is AssetRecord => Boolean(asset));
     },
-    async rename(_assetId: string, _name: string) {
-      throw new Error("模拟接口不支持重命名素材。");
+    async list(projectId) {
+      return [...(assetStore.get(projectId ?? "") ?? [])];
+    },
+    async rename(assetId: string, name: string) {
+      for (const list of assetStore.values()) {
+        const asset = list.find((item) => item.id === assetId);
+        if (asset) {
+          asset.name = name;
+          return asset;
+        }
+      }
+      throw new Error("素材不存在。");
     },
     async composeSheet() {
       throw new Error("模拟接口不支持生成总览图。");
     },
-    async delete() {},
+    async delete(assetId: string) {
+      for (const [projectId, list] of assetStore) {
+        const next = list.filter((asset) => asset.id !== assetId);
+        if (next.length !== list.length) {
+          for (const asset of list) {
+            if (asset.id === assetId && asset.path.startsWith("blob:")) {
+              try { URL.revokeObjectURL(asset.path); } catch {}
+            }
+          }
+          assetStore.set(projectId, next);
+          return;
+        }
+      }
+    },
     async saveAs() {
       return { path: "" };
     },
@@ -209,17 +267,80 @@ export const mockApi: ZhihuiApi = {
     async processText(params) {
       return { text: params.prompt.trim() };
     },
-    async createTask() {
-      const task: GenerateImageResult = { taskId: nanoid(), status: "failed", assetIds: [], error: "浏览器预览模式未连接 TokenFlux。" };
-      tasks.set(task.taskId, task);
-      return task;
+    async createTask(params) {
+      const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
+      const token = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      if (token) headers.authorization = `Bearer ${token}`;
+      const size = String(params.size || "1024x1024");
+      const [widthText, heightText] = size.toLowerCase().split("x");
+      const width = Number(widthText) || 1024;
+      const height = Number(heightText) || 1024;
+      const longEdge = Math.max(width, height);
+      const ratioValue = params.extra?.ratio || (width >= height ? `${Math.round((width / height) * 2) / 2}:1` : `1:${Math.round((height / width) * 2) / 2}`);
+      const requestId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const taskId = requestId;
+      try {
+        const response = await fetch(`${apiOrigin}/v1/image/generations`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            request_id: requestId,
+            model: String(params.model || "gpt-image-2"),
+            prompt: String(params.prompt || ""),
+            aspect_ratio: ratioValue === "auto" ? "1:1" : String(ratioValue),
+            resolution: String(params.extra?.resolution || (longEdge >= 2800 ? "4K" : longEdge >= 1500 ? "2K" : "1K")),
+            quality: String(params.extra?.quality || "auto"),
+            quantity: Math.max(1, Math.min(4, Number(params.n) || 1)),
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error?.message || payload.error || payload.detail || `生成失败（${response.status}）`);
+        if (payload.status === "succeeded" && payload.assetId) {
+          const assetResponse = await fetch(`${apiOrigin}/v1/image/assets/${encodeURIComponent(String(payload.assetId))}`, {
+            headers: token ? { authorization: `Bearer ${token}` } : {},
+          });
+          if (assetResponse.ok) {
+            const blob = await assetResponse.blob();
+            const id = nanoid();
+            const path = URL.createObjectURL(blob);
+            const asset: AssetRecord = {
+              id,
+              projectId: params.projectId,
+              type: "image",
+              name: `${String(params.model || "生成图片")}-${new Date().toLocaleTimeString("zh-CN", { hour12: false })}.png`,
+              path,
+              tags: ["generated"],
+              favorite: false,
+              sourceNodeId: params.sourceNodeId,
+              metadata: { role: "result", requestId, size },
+              createdAt: now(),
+            };
+            const list = assetStore.get(params.projectId ?? "") ?? [];
+            list.push(asset);
+            assetStore.set(params.projectId ?? "", list);
+            const result: GenerateImageResult = { taskId, status: "completed", assetIds: [asset.id] };
+            tasks.set(taskId, result);
+            return result;
+          }
+        }
+        if (payload.status === "failed") throw new Error(payload.error || "生成失败，请检查模型配置或积分");
+        const task: GenerateImageResult = { taskId, status: "failed", assetIds: [], error: "任务未返回结果" };
+        tasks.set(task.taskId, task);
+        return task;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const task: GenerateImageResult = { taskId, status: "failed", assetIds: [], error: message };
+        tasks.set(task.taskId, task);
+        return task;
+      }
     },
     async status(taskId: string) {
       return tasks.get(taskId) ?? { taskId, status: "failed", assetIds: [], error: "任务不存在。" };
     },
     async cancel(taskId: string) {
       const task: GenerateImageResult = { taskId, status: "canceled", assetIds: [] };
-      tasks.set(taskId, task);
+      tasks.set(task.taskId, task);
       return task;
     },
   },
