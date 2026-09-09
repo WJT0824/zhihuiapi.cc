@@ -249,8 +249,8 @@ function outputSize(ratio, resolution) {
   const f = factors[String(ratio || '1:1')] || 1;
   return `${base}x${Math.round(base * f)}`;
 }
-async function runGatewayGeneration(job, user, referenceIds) {
-  const ai = activeAiConfig();
+async function runGatewayGeneration(job, user, referenceIds, aiOverride) {
+  const ai = aiOverride || activeAiConfig();
   if (!ai.baseUrl || !ai.apiKey) throw new Error('服务器尚未配置上游图像服务，请在运营后台设置 AI 服务。');
   const refs = store.references.filter((r) => referenceIds.includes(r.id) && r.userId === user.id);
   const prompt = String(job.prompt || '');
@@ -391,7 +391,10 @@ async function gateway(req, res, pathName) {
     const job = { id: uid(), requestId, userId: user.id, prompt: String(body.prompt || ''), model: String(body.model || body.modelId || AI_IMAGE_MODEL), aspectRatio: String(body.aspect_ratio || '1:1'), resolution: String(body.resolution || '1K'), quality: String(body.quality || 'auto'), quantity: Math.max(1, Math.min(4, Number(body.quantity) || 1)), status: 'processing', cost, createdAt: now() };
     if (user.role !== 'admin') user.points -= cost;
     store.jobs.push(job); store.ledger.push({ id: uid(), userId: user.id, type: 'image', points: user.role === 'admin' ? 0 : -cost, requestId, createdAt: now() }); await persist();
-    try { await runGatewayGeneration(job, user, Array.isArray(body.reference_ids) ? body.reference_ids : []); await persist(); }
+    const overrideBaseUrl = String(body.baseUrl || body.ai_base_url || req.headers['x-ai-base-url'] || '').trim();
+    const overrideApiKey = String(body.apiKey || body.ai_api_key || req.headers['x-ai-key'] || '').trim();
+    const aiOverride = overrideBaseUrl && overrideApiKey ? { baseUrl: overrideBaseUrl, apiKey: overrideApiKey } : undefined;
+    try { await runGatewayGeneration(job, user, Array.isArray(body.reference_ids) ? body.reference_ids : [], aiOverride); await persist(); }
     catch (err) { if (user.role !== 'admin') user.points += cost; job.status = 'failed'; job.error = String(err.message || err).slice(0, 500); store.ledger.push({ id: uid(), userId: user.id, type: 'image-refund', points: user.role === 'admin' ? 0 : cost, requestId, createdAt: now() }); await persist(); }
     return send(res, job.status === 'succeeded' ? 201 : 200, gatewayJob(job));
   }

@@ -273,6 +273,8 @@ export const mockApi: ZhihuiApi = {
       const headers: Record<string, string> = { "content-type": "application/json" };
       if (token) headers.authorization = `Bearer ${token}`;
       const size = String(params.size || "1024x1024");
+      const requestApiKey = String(mockSettings.tokenFluxApiKey ?? "").trim();
+      const requestBaseUrl = String(mockSettings.tokenFluxBaseUrl ?? "").trim();
       const [widthText, heightText] = size.toLowerCase().split("x");
       const width = Number(widthText) || 1024;
       const height = Number(heightText) || 1024;
@@ -292,6 +294,7 @@ export const mockApi: ZhihuiApi = {
             resolution: String(params.extra?.resolution || (longEdge >= 2800 ? "4K" : longEdge >= 1500 ? "2K" : "1K")),
             quality: String(params.extra?.quality || "auto"),
             quantity: Math.max(1, Math.min(4, Number(params.n) || 1)),
+            ...(requestApiKey && requestBaseUrl ? { apiKey: requestApiKey, baseUrl: requestBaseUrl } : {}),
           }),
         });
         const payload = await response.json();
