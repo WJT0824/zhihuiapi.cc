@@ -357,14 +357,48 @@ async function taskThumb(job) {
 
 async function historyPage() {
   let jobs = [];
-  try { const d = await api('/v1/image/history'); jobs = d.history || []; }
-  catch { try { const d = await api('/api/v1/tasks'); jobs = (d.tasks || []).map((t) => ({ id: t.id, status: t.status, prompt: t.prompt, modelId: t.model, createdAt: t.createdAt, error: t.error })); } catch {} }
+  let source = 'job';
+  try { const d = await api('/v1/image/history'); jobs = (d.history || []).map((j) => ({ ...j, id: j.id || j.jobId, source: 'job' })); }
+  catch { try { const d = await api('/api/v1/tasks'); jobs = (d.tasks || []).map((t) => ({ id: t.id, status: t.status, prompt: t.prompt, modelId: t.model, createdAt: t.createdAt, error: t.error, source: 'task' })); source = 'task'; } catch {} }
   const rows = await Promise.all(jobs.slice(0, 40).map(async (j) => {
     const thumb = j.assetId || j.asset ? await taskThumb(j) : '';
-    return `<div class="task-card">${thumb}<div style="flex:1;min-width:0"><div style="font-weight:750">${esc(j.prompt || '未命名任务')}</div><div style="font-size:12px;color:#8a94a8">${esc(j.modelId || j.model || '')} · ${new Date(j.createdAt).toLocaleString('zh-CN')}</div>${j.error ? `<div style="font-size:12px;color:#d9434a;margin-top:4px">${esc(j.error)}</div>` : ''}</div>${taskStatusLabel(j)}</div>`;
+    return `<div class="task-card"><label style="display:flex;align-items:center"><input type="checkbox" data-task-check data-task-id="${esc(j.id)}" data-task-source="${j.source}"></label>${thumb}<div style="flex:1;min-width:0"><div style="font-weight:750">${esc(j.prompt || '未命名任务')}</div><div style="font-size:12px;color:#8a94a8">${esc(j.modelId || j.model || '')} · ${new Date(j.createdAt).toLocaleString('zh-CN')}</div>${j.error ? `<div style="font-size:12px;color:#d9434a;margin-top:4px">${esc(j.error)}</div>` : ''}</div>${taskStatusLabel(j)}<button class="btn" style="margin-left:10px" data-action="delete-task" data-task-id="${esc(j.id)}" data-task-source="${j.source}">删除</button></div>`;
   }));
   const items = rows.length ? rows.join('') : '<div class="empty">还没有生成记录，去创作台发起第一次生成吧。</div>';
-  return workspaceShell(`<div style="max-width:1080px;margin:0 auto;padding:26px 18px"><div class="panel-card"><h3 style="margin-bottom:18px">云端生成记录</h3><div class="task-list">${items}</div></div></div>`, 'history');
+  const toolbar = rows.length ? `<div class="toolbar" style="display:flex;gap:10px;align-items:center;margin-bottom:14px"><label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="task-select-all"> 全选</label><button class="btn" id="task-delete-selected" disabled>删除选中</button><span id="task-select-count" style="font-size:12px;color:#8a94a8">已选 0 项</span></div>` : '';
+  return workspaceShell(`<div style="max-width:1080px;margin:0 auto;padding:26px 18px"><div class="panel-card"><h3 style="margin-bottom:18px">云端生成记录</h3>${toolbar}<div class="task-list">${items}</div></div></div>`, 'history');
+}
+
+function bindHistory() {
+  const checks = Array.from(document.querySelectorAll('[data-task-check]'));
+  const selectAll = document.querySelector('#task-select-all');
+  const countBox = document.querySelector('#task-select-count');
+  const deleteBtn = document.querySelector('#task-delete-selected');
+  const sync = () => {
+    const selected = checks.filter((el) => el.checked);
+    if (countBox) countBox.textContent = `已选 ${selected.length} 项`;
+    if (deleteBtn) deleteBtn.disabled = !selected.length;
+    if (selectAll) selectAll.checked = selected.length === checks.length && checks.length > 0;
+    if (selectAll) selectAll.indeterminate = selected.length > 0 && selected.length < checks.length;
+  };
+  if (selectAll) selectAll.onchange = () => { checks.forEach((el) => { el.checked = selectAll.checked; }); sync(); };
+  checks.forEach((el) => { el.onchange = sync; });
+  const remove = async (items) => {
+    if (!items.length) return;
+    const jobIds = items.filter((item) => item.source === 'job').map((item) => item.id);
+    const taskIds = items.filter((item) => item.source === 'task').map((item) => item.id);
+    try {
+      if (jobIds.length) await api('/v1/image/history', { method: 'DELETE', body: JSON.stringify({ job_ids: jobIds }) });
+      if (taskIds.length) await api('/api/v1/tasks', { method: 'DELETE', body: JSON.stringify({ ids: taskIds }) });
+      toast(`已删除 ${items.length} 条任务记录`, 'ok');
+      render();
+    } catch (err) { toast(err.message, 'error'); }
+  };
+  if (deleteBtn) deleteBtn.onclick = () => remove(checks.filter((el) => el.checked).map((el) => ({ id: el.dataset.taskId, source: el.dataset.taskSource })));
+  document.querySelectorAll('[data-action="delete-task"]').forEach((btn) => {
+    btn.onclick = () => remove([{ id: btn.dataset.taskId, source: btn.dataset.taskSource }]);
+  });
+  sync();
 }
 
 function walletPage() {
@@ -419,6 +453,8 @@ async function adminPage() {
   if (!d) return workspaceShell(`<div class="empty">需要管理员权限</div>`, 'admin');
   let aiConfig = {};
   try { const cfg = await api('/v1/admin/ai-config'); aiConfig = cfg.config || {}; } catch {}
+  let rechargeKeyConfigured = false;
+  try { const keyInfo = await api('/v1/admin/recharge-key'); rechargeKeyConfigured = Boolean(keyInfo.configured); } catch {}
   const stats = d.stats || {};
   const userRows = (d.users || []).slice(-12).reverse().map((u) => `<tr><td>${esc(u.nickname || u.email || u.username || '')}</td><td>${esc(u.email || '')}</td><td>${u.role}</td><td>${money(u.points ?? u.credits)}</td><td>${new Date(u.createdAt).toLocaleString('zh-CN')}</td></tr>`).join('');
   const jobRows = (d.jobs || []).slice(0, 12).map((j) => `<tr><td>${esc(j.prompt || (j.requestId || '').slice(0, 12))}</td><td>${taskStatusLabel(j)}</td><td>${esc(j.model || '')}</td><td>${j.cost ?? ''}</td><td>${new Date(j.createdAt).toLocaleString('zh-CN')}</td></tr>`).join('');
@@ -426,6 +462,7 @@ async function adminPage() {
   return workspaceShell(`<div style="max-width:1100px;margin:0 auto;padding:24px 18px">
     <div class="stats">${Object.entries({ 用户: stats.users, 任务: stats.jobs, 积分总量: stats.credits, 成功任务: stats.succeeded }).map(([k, v]) => `<div class="stat"><b>${v ?? 0}</b><span>${k}</span></div>`).join('')}</div>
     <div class="panel-card"><h3 style="margin-bottom:14px">生成充值码</h3><form id="admin-code-form" style="display:flex;gap:10px;flex-wrap:wrap"><input class="input" name="amount" type="number" min="1" placeholder="单码积分" style="width:130px" value="100"><input class="input" name="count" type="number" min="1" placeholder="数量" style="width:100px" value="1"><button class="btn primary">生成</button><p id="code-result" style="width:100%;font-size:12px;color:#09835e;white-space:pre-wrap"></p></form></div>
+    <div class="panel-card"><h3 style="margin-bottom:14px">积分码签名私钥（与插件互通）</h3><form id="recharge-key-form"><label class="field"><span>Ed25519 私钥（PEM）</span><textarea class="input" name="privateKey" style="min-height:110px" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></label><button class="btn primary" type="submit">导入并启用插件格式积分码</button><p id="recharge-key-result" style="font-size:12px;color:#09835e">${rechargeKeyConfigured ? '当前已配置签名私钥，生成的积分码为插件通用格式。' : '当前未配置签名私钥；生成的是网站专用 ZH- 兑换码。导入私钥后，网站生成的兑换码即可在插件中使用。'}</p></form></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">AI 图像服务（运行时可切换上游）</h3><form id="ai-config-form"><div class="form-grid"><label class="field"><span>上游中转地址</span><input class="input" name="baseUrl" value="${esc(aiConfig.baseUrl || 'https://tokenflux.cloud/')}" placeholder="支持 https://host、https://host/v1 或完整接口地址"></label><label class="field"><span>生成模型</span><input class="input" name="model" value="${esc(aiConfig.model || 'gpt-image-2')}" placeholder="gpt-image-2"></label></div><label class="field"><span>上游 API Key</span><input class="input" name="apiKey" type="password" placeholder="留空表示不修改当前密钥"></label><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button class="btn primary" type="submit">保存并立即生效</button><button class="btn" type="button" id="ai-config-test">测试并读取模型</button></div><p id="ai-config-result" style="font-size:12px;color:#09835e"></p><p style="font-size:12px;color:#8a94a8;margin-top:8px">切换上游只需填这里并保存，无需重新部署；系统会自动兼容根地址、/v1 和完整接口地址。</p></form></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">工作流上传 / 功能同步</h3><form id="workflow-form"><label class="field"><span>工作流 JSON（可粘贴或上传）</span><textarea class="input" name="workflow" style="min-height:150px" placeholder='{"code":"product-hero","name":"产品主视觉","version":1,...}'></textarea></label><input class="input" type="file" id="workflow-file" accept=".json,application/json" style="margin-top:10px"><button class="btn primary" style="margin-top:14px">上传并发布工作流</button><p id="workflow-result" style="font-size:12px;color:#09835e;white-space:pre-wrap"></p></form></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">已发布工作流</h3><table class="table"><thead><tr><th>名称</th><th>代码</th><th>版本</th><th>状态</th><th>更新时间</th></tr></thead><tbody>${wfRows || '<tr><td colspan="5">暂无工作流</td></tr>'}</tbody></table></div>
@@ -443,7 +480,7 @@ async function render() {
     APP.innerHTML = topbar('studio') + '<main class="canvas-embed"><iframe src="/canvas/?from=site" title="郅绘完整画布" allow="clipboard-read; clipboard-write"></iframe></main>';
     return;
   }
-  if (state.page === 'history') { APP.innerHTML = await historyPage(); return; }
+  if (state.page === 'history') { APP.innerHTML = await historyPage(); bindHistory(); return; }
   if (state.page === 'wallet') { APP.innerHTML = walletPage(); bindWallet(); return; }
   if (state.page === 'settings') { await loadModels(); APP.innerHTML = settingsPage(); bindSettings(); return; }
   if (state.page === 'admin') { APP.innerHTML = await adminPage(); bindAdmin(); return; }
@@ -957,6 +994,16 @@ function bindAdmin() {
       if (box) box.textContent = `${d.message || '连接成功'}${ids ? '：' + ids : ''}`;
       toast('上游连接正常', 'ok');
     } catch (err) { if (box) box.textContent = '测试失败：' + err.message; toast(err.message, 'error'); }
+  };
+  const keyForm = $('#recharge-key-form'); if (keyForm) keyForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(keyForm));
+    const box = $('#recharge-key-result');
+    try {
+      const d = await api('/v1/admin/recharge-key', { method: 'POST', body: JSON.stringify({ privateKey: f.privateKey }) });
+      if (box) box.textContent = d.configured ? '签名私钥已导入，网站现在可以生成插件通用积分码。' : '导入失败。';
+      toast('积分码签名私钥已保存', 'ok');
+    } catch (err) { if (box) box.textContent = '导入失败：' + err.message; toast(err.message, 'error'); }
   };
   const codeForm = $('#admin-code-form'); if (codeForm) codeForm.onsubmit = async (e) => {
     e.preventDefault(); const f = Object.fromEntries(new FormData(codeForm));

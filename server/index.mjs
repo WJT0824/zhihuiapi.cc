@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
-import { existsSync, createReadStream, createWriteStream, statSync } from 'node:fs';
+import { existsSync, createReadStream, createWriteStream, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
@@ -14,6 +14,13 @@ const ASSET_DIR = path.join(DATA_DIR, 'assets');
 const REF_DIR = path.join(DATA_DIR, 'references');
 const DOWNLOAD_DIR = path.join(DATA_DIR, 'downloads');
 const PLUGIN_FILENAME = '郅绘CDR插件ai版-v1.4.0.exe';
+const RECHARGE_CODE_PREFIX = 'ZHRC1';
+const RECHARGE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAziIuFwOLkYPZE7YI2dL7fwlDzsRRFANWlvOosrPfCnY=
+-----END PUBLIC KEY-----`;
+const RECHARGE_AMOUNTS = new Set([10, 20, 30, 50, 100, 200]);
+const RECHARGE_PERMANENT_EXPIRES = '9999-12-31T23:59:59.999Z';
+const RECHARGE_KEY_FILE = path.join(DATA_DIR, 'recharge-private.pem');
 const ADMIN_KEY = process.env.ZH_ADMIN_KEY || 'dev-admin-2026';
 const PUBLIC_API_ORIGIN = (process.env.PUBLIC_API_ORIGIN || '').replace(/\/+$/, '');
 const AI_BASE_URL = (process.env.AI_BASE_URL || '').replace(/\/+$/, '');
@@ -27,7 +34,7 @@ const uid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const passwordHash = (value, salt) => crypto.scryptSync(value, salt, 64).toString('hex');
-const defaultStore = () => ({ users: [], tasks: [], redemptionCodes: [], redemptions: [], ledger: [], sessions: {}, references: [], jobs: [], assets: [], workflows: [], aiConfig: { baseUrl: '', apiKey: '', model: '' } });
+const defaultStore = () => ({ users: [], tasks: [], redemptionCodes: [], redemptions: [], rechargeNonces: [], ledger: [], sessions: {}, references: [], jobs: [], assets: [], workflows: [], aiConfig: { baseUrl: '', apiKey: '', model: '' } });
 let store = defaultStore();
 async function load() {
   await mkdir(DATA_DIR, { recursive: true });
@@ -35,7 +42,7 @@ async function load() {
   await mkdir(REF_DIR, { recursive: true });
   await mkdir(DOWNLOAD_DIR, { recursive: true });
   if (existsSync(DATA_FILE)) { try { store = JSON.parse(await readFile(DATA_FILE, 'utf8')); } catch { store = defaultStore(); } }
-  store.tasks ||= []; store.redemptionCodes ||= []; store.redemptions ||= []; store.ledger ||= []; store.sessions ||= {}; store.references ||= []; store.jobs ||= []; store.assets ||= []; store.workflows ||= []; store.aiConfig ||= { baseUrl: '', apiKey: '', model: '' };
+  store.tasks ||= []; store.redemptionCodes ||= []; store.redemptions ||= []; store.rechargeNonces ||= []; store.ledger ||= []; store.sessions ||= {}; store.references ||= []; store.jobs ||= []; store.assets ||= []; store.workflows ||= []; store.aiConfig ||= { baseUrl: '', apiKey: '', model: '' };
   if (!store.users.length) {
     const passwordSalt = crypto.randomBytes(16).toString('hex');
     store.users.push({ id: uid(), nickname: 'admin', email: '', passwordSalt, passwordHash: passwordHash(ADMIN_KEY, passwordSalt), points: 1000, role: 'admin', createdAt: now() });
@@ -254,6 +261,89 @@ const imageGatewayModels = async () => {
   }
   return [...ordered.values()];
 };
+const normalizeRechargeAccount = (value) => String(value || '').trim().replace(/\s+/g, '').toLowerCase();
+const decodeBase64Url = (value) => {
+  const normalized = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+  return Buffer.from(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '='), 'base64');
+};
+const encodeBase64Url = (buffer) => Buffer.from(buffer).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+const getRechargePrivateKey = () => {
+  const inline = String(process.env.ZH_RECHARGE_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
+  if (inline) return inline;
+  try {
+    return existsSync(RECHARGE_KEY_FILE) ? readFileSync(RECHARGE_KEY_FILE, 'utf8') : '';
+  } catch {
+    return '';
+  }
+};
+const verifyPluginRechargeCode = (code, user) => {
+  const parts = String(code || '').trim().split('.');
+  if (parts.length !== 3 || parts[0] !== RECHARGE_CODE_PREFIX) throw new Error('积分访问码格式不正确。');
+  const payloadBuffer = decodeBase64Url(parts[1]);
+  const signature = decodeBase64Url(parts[2]);
+  if (!crypto.verify(null, payloadBuffer, RECHARGE_PUBLIC_KEY, signature)) throw new Error('积分访问码签名无效，请确认复制完整。');
+  let payload;
+  try {
+    payload = JSON.parse(payloadBuffer.toString('utf8'));
+  } catch {
+    throw new Error('积分访问码内容无法解析。');
+  }
+  if (payload.v !== 1 || payload.app !== 'zhihui-ai-canvas') throw new Error('积分访问码版本不匹配。');
+  if (!payload.nonce || String(payload.nonce).length < 8) throw new Error('积分访问码缺少唯一编号。');
+  if (!RECHARGE_AMOUNTS.has(Number(payload.amountCny))) throw new Error('积分访问码金额不在允许档位内。');
+  if (Number(payload.points) !== Number(payload.amountCny) * 10) throw new Error('积分访问码积分数量不正确。');
+  const payloadUser = normalizeRechargeAccount(payload.user);
+  const userKeys = new Set([normalizeRechargeAccount(user.nickname), normalizeRechargeAccount(user.id), normalizeRechargeAccount(user.email)]);
+  if (payloadUser !== '*' && !userKeys.has(payloadUser)) throw new Error(`该积分访问码属于 ${payload.user}，不能兑换到当前账号 ${user.nickname || user.id}。`);
+  if (Number.isNaN(Date.parse(payload.expiresAt)) || new Date(payload.expiresAt).getTime() < Date.now()) throw new Error('积分访问码已过期，请联系管理员重新发放。');
+  return payload;
+};
+async function redeemRechargeCode(user, rawCode) {
+  const code = String(rawCode || '').trim();
+  if (!code) throw Object.assign(new Error('请输入积分访问码。'), { status: 400 });
+  if (code.toUpperCase().startsWith(`${RECHARGE_CODE_PREFIX}.`)) {
+    const payload = verifyPluginRechargeCode(code, user);
+    if (store.rechargeNonces.some((item) => item.nonce === payload.nonce)) throw Object.assign(new Error('该积分访问码已使用。'), { status: 409 });
+    const points = Number(payload.points);
+    user.points += points;
+    store.rechargeNonces.push({ nonce: payload.nonce, userId: user.id, points, amountCny: Number(payload.amountCny), redeemedAt: now() });
+    store.redemptions.push({ id: uid(), code: 'ZHRC1', userId: user.id, points, createdAt: now() });
+    store.ledger.push({ id: uid(), userId: user.id, type: 'redeem', points, createdAt: now() });
+    await persist();
+    return { points: user.points, credited: points, balance: user.points };
+  }
+  const available = store.redemptionCodes.find((item) => item.code === code.toUpperCase() && !item.usedAt);
+  if (!available) throw Object.assign(new Error('兑换码无效或已使用'), { status: 400 });
+  available.usedAt = now();
+  available.userId = user.id;
+  user.points += available.points;
+  store.redemptions.push({ id: uid(), code: available.code, userId: user.id, points: available.points, createdAt: now() });
+  store.ledger.push({ id: uid(), userId: user.id, type: 'redeem', points: available.points, createdAt: now() });
+  await persist();
+  return { points: user.points, credited: available.points, balance: user.points };
+}
+function createSignedRechargeCodes(points, count) {
+  const privateKey = getRechargePrivateKey();
+  const amountCny = Number(points) / 10;
+  if (!privateKey || !RECHARGE_AMOUNTS.has(amountCny)) return null;
+  const codes = [];
+  for (let i = 0; i < count; i += 1) {
+    const payload = {
+      v: 1,
+      app: 'zhihui-ai-canvas',
+      user: '*',
+      amountCny,
+      points: amountCny * 10,
+      nonce: crypto.randomUUID(),
+      issuedAt: now(),
+      expiresAt: RECHARGE_PERMANENT_EXPIRES,
+    };
+    const payloadBuffer = Buffer.from(JSON.stringify(payload), 'utf8');
+    const signature = crypto.sign(null, payloadBuffer, privateKey);
+    codes.push(`${RECHARGE_CODE_PREFIX}.${encodeBase64Url(payloadBuffer)}.${encodeBase64Url(signature)}`);
+  }
+  return codes;
+}
 const gatewayJob = (job) => ({ success: job.status === 'succeeded', jobId: job.id, assetId: job.status === 'succeeded' ? job.id : null, status: job.status, error: job.error || undefined, prompt: job.prompt || '', modelId: job.model || AI_IMAGE_MODEL, createdAt: job.createdAt || '' });
 const issueTokens = (user) => { const accessToken = uid(); const refreshToken = uid(); store.sessions[hash(accessToken)] = { userId: user.id, kind: 'access', createdAt: now() }; store.sessions[hash(refreshToken)] = { userId: user.id, kind: 'refresh', createdAt: now() }; return { access_token: accessToken, refresh_token: refreshToken }; };
 const readRawBody = async (req) => { const chunks = []; let total = 0; for await (const chunk of req) { total += chunk.length; if (total > 60 * 1024 * 1024) throw Object.assign(new Error('请求体过大'), { status: 413 }); chunks.push(Buffer.from(chunk)); } return Buffer.concat(chunks); };
@@ -471,15 +561,30 @@ async function gateway(req, res, pathName) {
   const jobMatch = pathName.match(/^\/v1\/image\/jobs\/([^/]+)$/);
   if (req.method === 'GET' && jobMatch) { const job = store.jobs.find((j) => j.id === jobMatch[1] && j.userId === user.id); return job ? send(res, 200, gatewayJob(job)) : fail(404, '任务不存在'); }
   if (req.method === 'GET' && pathName === '/v1/image/history') return send(res, 200, { success: true, history: store.jobs.filter((j) => j.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100).map(gatewayJob) });
-  if (req.method === 'DELETE' && pathName === '/v1/image/history') { const id = String(body.job_id || body.jobId || ''); const job = store.jobs.find((j) => j.id === id && j.userId === user.id); if (job) { if (job.assetFile) await unlink(job.assetFile).catch(() => {}); store.jobs = store.jobs.filter((j) => j.id !== id); await persist(); } return send(res, 200, { success: true }); }
+  if (req.method === 'DELETE' && pathName === '/v1/image/history') {
+    const ids = new Set([
+      ...(Array.isArray(body.job_ids) ? body.job_ids : []),
+      ...(Array.isArray(body.jobIds) ? body.jobIds : []),
+      body.job_id,
+      body.jobId,
+      body.id,
+    ].filter(Boolean).map(String));
+    if (!ids.size) return fail(400, '请选择要删除的任务');
+    const targets = store.jobs.filter((job) => ids.has(job.id) && job.userId === user.id);
+    for (const job of targets) {
+      if (job.assetFile) await unlink(job.assetFile).catch(() => {});
+    }
+    store.jobs = store.jobs.filter((job) => !(ids.has(job.id) && job.userId === user.id));
+    await persist();
+    return send(res, 200, { success: true, deleted: targets.length });
+  }
   if (req.method === 'POST' && pathName === '/v1/redeem') {
-    const code = String(body.code || '').trim().toUpperCase();
-    const available = store.redemptionCodes.find((r) => r.code === code && !r.usedAt);
-    if (!available) return fail(400, '兑换码无效或已使用');
-    available.usedAt = now(); available.userId = user.id; user.points += available.points;
-    store.redemptions.push({ id: uid(), code, userId: user.id, points: available.points, createdAt: now() });
-    store.ledger.push({ id: uid(), userId: user.id, type: 'redeem', points: available.points, createdAt: now() }); await persist();
-    return send(res, 200, { success: true, credited: available.points, balance: user.points });
+    try {
+      const result = await redeemRechargeCode(user, body.code);
+      return send(res, 200, { success: true, credited: result.credited, balance: result.balance, points: result.points });
+    } catch (error) {
+      return fail(error.status || 400, error.message || String(error));
+    }
   }
   if (req.method === 'GET' && pathName === '/v1/studio/workflows') return send(res, 200, { success: true, workflows: store.workflows || [] });
   if (user.role !== 'admin') return fail(403, '需要管理员权限');
@@ -496,7 +601,34 @@ async function gateway(req, res, pathName) {
     store.aiConfig = { baseUrl, apiKey, model }; await persist();
     return send(res, 200, { success: true, config: { baseUrl, model, apiKeyConfigured: Boolean(apiKey), apiKeyPreview: apiKey ? `${apiKey.slice(0, 3)}…${apiKey.slice(-3)}` : '' } });
   }
-  if (req.method === 'POST' && pathName === '/v1/admin/redeem-codes') { const points = Math.max(1, Math.min(100000, Number(body.amount || body.points) || 10)); const count = Math.max(1, Math.min(100, Number(body.count) || 1)); const codes = []; for (let i = 0; i < count; i += 1) { const raw = `ZH-${crypto.randomBytes(5).toString('hex').toUpperCase()}`; codes.push(raw); store.redemptionCodes.push({ id: uid(), code: raw, points, createdAt: now() }); } await persist(); return send(res, 201, { success: true, codes, amount: points }); }
+  if (req.method === 'POST' && pathName === '/v1/admin/redeem-codes') {
+    const points = Math.max(1, Math.min(100000, Number(body.amount || body.points) || 10));
+    const count = Math.max(1, Math.min(100, Number(body.count) || 1));
+    const signed = createSignedRechargeCodes(points, count);
+    if (signed) return send(res, 201, { success: true, codes: signed, amount: points, signed: true });
+    const codes = [];
+    for (let i = 0; i < count; i += 1) {
+      const raw = `ZH-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
+      codes.push(raw);
+      store.redemptionCodes.push({ id: uid(), code: raw, points, createdAt: now() });
+    }
+    await persist();
+    return send(res, 201, { success: true, codes, amount: points, signed: false });
+  }
+  if (req.method === 'GET' && pathName === '/v1/admin/recharge-key') {
+    return send(res, 200, { success: true, configured: Boolean(getRechargePrivateKey()) });
+  }
+  if ((req.method === 'POST' || req.method === 'PUT') && pathName === '/v1/admin/recharge-key') {
+    const privateKey = String(body.privateKey || '').replace(/\\n/g, '\n').trim();
+    try {
+      const publicKey = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'pem' }).trim();
+      if (publicKey !== RECHARGE_PUBLIC_KEY.trim()) return fail(400, '私钥与插件内置公钥不匹配。');
+      await writeFile(RECHARGE_KEY_FILE, `${privateKey}\n`);
+      return send(res, 200, { success: true, configured: true });
+    } catch {
+      return fail(400, '私钥格式不正确，应为 Ed25519 PEM 私钥。');
+    }
+  }
   if (req.method === 'GET' && pathName === '/v1/admin/dashboard') {
     const users = store.users.slice(-200); const jobs = store.jobs.slice(-100).reverse(); const workflows = store.workflows || [];
     return send(res, 200, { success: true, stats: { users: users.length, jobs: jobs.length, credits: users.reduce((n, u) => n + u.points, 0), succeeded: jobs.filter((j) => j.status === 'succeeded').length, failed: jobs.filter((j) => j.status === 'failed').length }, users: users.map((u) => ({ ...safeUser(u), blocked: false })), jobs: jobs.map((j) => ({ id: j.id, requestId: j.requestId, userId: j.userId, status: j.status, model: j.model, cost: j.cost, error: j.error, createdAt: j.createdAt })), workflows });
@@ -528,6 +660,19 @@ async function api(req, res, pathName) {
   if (pathName === '/api/v1/auth/me' && req.method === 'GET') return user ? send(res, 200, { user: safeUser(user) }) : send(res, 401, { error: '未登录。' });
   if (!user) return send(res, 401, { error: '请先登录。' });
   if (req.method === 'GET' && pathName === '/api/v1/tasks') return send(res, 200, { tasks: store.tasks.filter((t) => t.userId === user.id).sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(publicTask) });
+  if (req.method === 'DELETE' && pathName === '/api/v1/tasks') {
+    const ids = new Set([
+      ...(Array.isArray(body.ids) ? body.ids : []),
+      ...(Array.isArray(body.task_ids) ? body.task_ids : []),
+      body.id,
+      body.taskId,
+    ].filter(Boolean).map(String));
+    if (!ids.size) return send(res, 400, { error: '请选择要删除的任务。' });
+    const before = store.tasks.length;
+    store.tasks = store.tasks.filter((task) => !(ids.has(task.id) && task.userId === user.id));
+    await persist();
+    return send(res, 200, { success: true, deleted: before - store.tasks.length });
+  }
   if (req.method === 'POST' && (pathName === '/api/v1/tasks' || pathName === '/api/v1/studio/generate' || pathName === '/api/v1/studio/tasks')) {
     const cost = 10; const prompt = String(body.prompt || '').trim(); if (!prompt) return send(res,400,{error:'请输入创作描述。'}); if (user.points < cost) return send(res,402,{error:'积分不足。'});
     user.points -= cost; const task = { id: uid(), userId: user.id, prompt, model: body.model || 'gpt-image-2', mode: body.mode || (Array.isArray(body.images) && body.images.length ? 'edit' : 'generate'), status: 'queued', cost, progress: 0, request: body, createdAt: now() }; store.tasks.push(task); store.ledger.push({id:uid(),userId:user.id,type:'task',points:-cost,taskId:task.id,createdAt:now()});
@@ -551,15 +696,40 @@ async function api(req, res, pathName) {
     return send(res, 201, { task: publicTask(task), points: user.points });
   }
   if (req.method === 'GET' && pathName === '/api/v1/studio/tasks') return send(res, 200, { tasks: store.tasks.filter((t) => t.userId === user.id).map(publicTask) });
+  if (req.method === 'DELETE' && pathName === '/api/v1/studio/tasks') {
+    const ids = new Set([...(Array.isArray(body.ids) ? body.ids : []), ...(Array.isArray(body.task_ids) ? body.task_ids : []), body.id, body.taskId].filter(Boolean).map(String));
+    if (!ids.size) return send(res, 400, { error: '请选择要删除的任务。' });
+    const before = store.tasks.length;
+    store.tasks = store.tasks.filter((task) => !(ids.has(task.id) && task.userId === user.id));
+    await persist();
+    return send(res, 200, { success: true, deleted: before - store.tasks.length });
+  }
   if (req.method === 'GET' && pathName === '/api/v1/studio/models') return send(res, 200, { models: studioModels() });
   if (req.method === 'GET' && pathName === '/api/v1/studio/profile') return send(res, 200, { user: safeUser(user) });
   if (req.method === 'GET' && pathName === '/api/v1/studio/config') return send(res, 200, { apiOrigin: PUBLIC_API_ORIGIN || `http://${req.headers.host || 'localhost'}`, compatibility: 'zhihui-v1', models: studioModels(), aiEnabled: Boolean(AI_BASE_URL && AI_API_KEY) });
   const studioTask = pathName.match(/^\/api\/v1\/studio\/tasks\/([^/]+)$/);
   if (req.method === 'GET' && studioTask) { const task = store.tasks.find((t)=>t.id===studioTask[1] && t.userId===user.id); return task ? send(res,200,{task: publicTask(task)}) : send(res,404,{error:'任务不存在。'}); }
-  if (req.method === 'POST' && pathName === '/api/v1/points/redeem') { const code = String(body.code || '').trim().toUpperCase(); const available = store.redemptionCodes.find((r)=>r.code===code && !r.usedAt); if (!available) return send(res,400,{error:'兑换码无效或已使用。'}); available.usedAt=now(); available.userId=user.id; store.redemptions.push({ id:uid(), code, userId:user.id, points:available.points, createdAt:now() }); store.ledger.push({id:uid(),userId:user.id,type:'redeem',points:available.points,createdAt:now()}); user.points += available.points; await persist(); return send(res,200,{points:user.points, message:`已兑换 ${available.points} 积分。`}); }
+  if (req.method === 'POST' && pathName === '/api/v1/points/redeem') {
+    try {
+      const result = await redeemRechargeCode(user, body.code);
+      return send(res, 200, { points: result.points, credited: result.credited, message: `已兑换 ${result.credited} 积分。` });
+    } catch (error) {
+      return send(res, error.status || 400, { error: error.message || String(error) });
+    }
+  }
   const isAdmin = user.role === 'admin' || req.headers['x-admin-key'] === ADMIN_KEY;
   if (req.method === 'GET' && pathName === '/api/v1/admin/overview') { if (!isAdmin) return send(res,403,{error:'无权限。'}); return send(res,200,{users:store.users.map(safeUser), tasks:store.tasks, redemptions:store.redemptions, metrics:{users:store.users.length,tasks:store.tasks.length,points:store.users.reduce((n,u)=>n+u.points,0)}}); }
-  if (req.method === 'POST' && pathName === '/api/v1/admin/redemption-codes') { if (!isAdmin) return send(res,403,{error:'无权限。'}); const points=Math.max(1,Math.min(100000,Number(body.points)||100)); const count=Math.max(1,Math.min(100,Number(body.count)||1)); const codes=Array.from({length:count},()=>({id:uid(),code:`ZH-${crypto.randomBytes(5).toString('hex').toUpperCase()}`,points,createdAt:now()})); store.redemptionCodes.push(...codes); await persist(); return send(res,201,{codes}); }
+  if (req.method === 'POST' && pathName === '/api/v1/admin/redemption-codes') {
+    if (!isAdmin) return send(res, 403, { error: '无权限。' });
+    const points = Math.max(1, Math.min(100000, Number(body.points) || 100));
+    const count = Math.max(1, Math.min(100, Number(body.count) || 1));
+    const signed = createSignedRechargeCodes(points, count);
+    if (signed) return send(res, 201, { codes: signed.map((code) => ({ id: uid(), code, points, createdAt: now() })), signed: true });
+    const codes = Array.from({ length: count }, () => ({ id: uid(), code: `ZH-${crypto.randomBytes(5).toString('hex').toUpperCase()}`, points, createdAt: now() }));
+    store.redemptionCodes.push(...codes);
+    await persist();
+    return send(res, 201, { codes, signed: false });
+  }
   if (/^\/api\/v1\/studio\//.test(pathName)) return send(res, 404, { error:'不支持的插件接口。', compatibility:'zhihui-v1' });
   return send(res, 404, { error:'接口不存在。' });
 }
