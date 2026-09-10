@@ -265,7 +265,22 @@ export const mockApi: ZhihuiApi = {
       ];
     },
     async processText(params) {
-      return { text: params.prompt.trim() };
+      const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
+      const token = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
+      const response = await fetch(`${apiOrigin}/v1/ai/text`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({
+          tool: params.tool,
+          prompt: params.prompt,
+          model: params.model || "gpt-5.5",
+          apiKey: String(mockSettings.tokenFluxApiKey ?? "").trim() || undefined,
+          baseUrl: String(mockSettings.tokenFluxBaseUrl ?? "").trim() || undefined,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || payload.detail || `文本处理失败（${response.status}）`);
+      return { text: String(payload.text || params.prompt).trim() };
     },
     async createTask(params) {
       const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";

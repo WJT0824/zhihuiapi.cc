@@ -179,6 +179,7 @@ export type TextTool = "chat" | "polish-prompt" | "reverse-prompt";
 export interface ProcessTextParams {
   tool: TextTool;
   prompt: string;
+  model?: string;
   referenceAssetIds?: string[];
 }
 

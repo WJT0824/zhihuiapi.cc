@@ -1047,6 +1047,19 @@ button:disabled {
   height: auto;
   resize: vertical;
 }
+.prompt-node-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+.prompt-tool-controls select {
+  min-width: 150px;
+}
+.prompt-tool-controls .run-button {
+  min-width: 108px;
+}
 
 .node-mini-controls,
 .workbench-controls {

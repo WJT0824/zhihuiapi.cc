@@ -1200,6 +1200,8 @@ function NodeCard({
   const inputPorts = node.inputs.length ? node.inputs : ["input"];
   const outputPorts = node.outputs.length ? node.outputs : ["output"];
   const isPromptNode = node.type === "prompt";
+  const promptTool = String(node.params.tool ?? "");
+  const isPromptToolNode = isPromptNode && ["chat", "polish-prompt", "reverse-prompt"].includes(promptTool);
   const isViewOnlyNode = node.type === "preview" || node.type === "compare";
   const isUploadNode = node.type === "image";
   const showFloatingControls = selected && !isViewOnlyNode && !isPromptNode && !isUploadNode;
@@ -1300,13 +1302,24 @@ function NodeCard({
       </header>
 
       {isPromptNode ? (
-        <textarea
-          className="node-control workbench-prompt prompt-only"
-          value={prompt}
-          onPointerDown={stopControlPointer}
-          onChange={(event) => setParam("prompt", event.target.value)}
-          placeholder="输入提示词，点击运行后会直接开始生图"
-        />
+        <div className="prompt-node-body">
+          <textarea
+            className="node-control workbench-prompt prompt-only"
+            value={prompt}
+            onPointerDown={stopControlPointer}
+            onChange={(event) => setParam("prompt", event.target.value)}
+            placeholder={isPromptToolNode ? "输入需要润色 / 分析的内容" : "输入文本内容"}
+          />
+          {isPromptToolNode && (
+            <PromptToolControls
+              node={node}
+              models={models}
+              onPointerDown={stopControlPointer}
+              onSetModel={(value) => setParam("inferenceModel", value)}
+              onRun={onRun}
+            />
+          )}
+        </div>
       ) : isUploadNode ? (
         <ImageUploadPanel resultAsset={resultAsset} resultAssets={resultAssets} onImportImage={onImportImage} onPointerDown={stopControlPointer} onOpenImage={onOpenImage} onImageLoad={onImageLoad} onImageContextMenu={onImageContextMenu} />
       ) : isViewOnlyNode ? (
@@ -1666,6 +1679,41 @@ function ImageViewer({
   );
 }
 
+function PromptToolControls({
+  node,
+  models,
+  onPointerDown,
+  onSetModel,
+  onRun,
+}: {
+  node: CanvasNode;
+  models: TokenFluxModel[];
+  onPointerDown: (event: PointerEvent<HTMLElement>) => void;
+  onSetModel: (value: string) => void;
+  onRun: () => void;
+}) {
+  const tool = String(node.params.tool ?? "chat");
+  const label = tool === "polish-prompt" ? "润色" : tool === "reverse-prompt" ? "分析" : "智能提示";
+  const currentRaw = String(node.params.inferenceModel ?? "GPT-5.5");
+  const choices = modelChoicesForRunMode(models, "inference", currentRaw);
+  const selected = choices.find((model) => model.id.toLowerCase() === currentRaw.toLowerCase())?.id ?? choices[0]?.id ?? currentRaw;
+  return (
+    <div className="node-mini-controls prompt-tool-controls node-control" onPointerDown={onPointerDown}>
+      <select value={selected} onChange={(event) => onSetModel(event.target.value)} title="推理模型">
+        {choices.map((model) => (
+          <option key={model.id} value={model.id}>
+            {model.name || model.id}
+          </option>
+        ))}
+      </select>
+      <button className="primary run-button" onClick={(event) => { event.stopPropagation(); onRun(); }} disabled={node.status === "running"}>
+        <Play size={15} />
+        {node.status === "running" ? "处理中…" : label}
+      </button>
+    </div>
+  );
+}
+
 function MiniRunControls({
   node,
   models,
@@ -1892,7 +1940,10 @@ function getMinimumNodeSize(node: CanvasNode) {
   if (node.type === "ai-generate") return { width: 660, height: 360 };
   if (node.type === "background") return { width: 660, height: 340 };
   if (node.type === "upscale" || node.type === "resize") return { width: 660, height: 320 };
-  if (node.type === "prompt") return { width: 660, height: 210 };
+  if (node.type === "prompt") {
+    const tool = String(node.params.tool ?? "");
+    return { width: 660, height: ["chat", "polish-prompt", "reverse-prompt"].includes(tool) ? 276 : 210 };
+  }
   if (node.type === "image") return { width: 520, height: 220 };
   if (node.type === "ecommerce-template" || node.type === "print-template") return { width: 660, height: 320 };
   return { width: 420, height: 320 };

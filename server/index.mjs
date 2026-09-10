@@ -440,6 +440,60 @@ async function runGatewayGeneration(job, user, referenceIds, aiOverride) {
   job.assetFile = assetFile; job.mimeType = 'image/png'; job.status = 'succeeded'; job.completedAt = now();
 }
 
+async function processUpstreamText(body) {
+  const platform = activeAiConfig();
+  const baseUrl = normalizeUpstreamBase(body.baseUrl || platform.baseUrl || '');
+  const apiKey = String(body.apiKey || platform.apiKey || '').trim();
+  if (!baseUrl || !apiKey) throw new Error('尚未配置可用的上游文本服务，请先在设置或运营后台配置。');
+  const tool = String(body.tool || 'chat');
+  const prompt = String(body.prompt || '').trim();
+  if (!prompt && tool !== 'reverse-prompt') throw new Error('请先输入需要处理的文本。');
+  const systemPrompt = tool === 'chat'
+    ? '你是郄绘 AI 画布里的智能对话助手。理解用户的广告、电商、视觉设计需求，给出清晰、可执行、适合继续生图的中文结果。只输出结果，不要解释接口。'
+    : tool === 'polish-prompt'
+      ? '你是顶级商业广告视觉提示词导演。把用户输入改写成高标准、高质量、可执行的中文图像生成提示词，补全主体、材质、光线、构图、镜头和排版要求。只输出提示词，不要解释。'
+      : '你是专业视觉分析师。结合用户要求，反推出准确的中文图像编辑提示词，重点保留主体身份、构图、材质和画面关系。只输出提示词，不要解释。';
+  const candidates = [];
+  const explicit = String(body.model || '').trim();
+  if (explicit) candidates.push(explicit);
+  try {
+    const live = await readUpstreamModels(baseUrl, apiKey);
+    for (const model of live) {
+      if ((model.tags || []).includes('reasoning')) candidates.push(model.modelId || model.id);
+    }
+  } catch {}
+  candidates.push('gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex-spark', 'gpt-4.1-mini');
+  let lastError = '';
+  for (const model of [...new Set(candidates.filter(Boolean))].slice(0, 8)) {
+    try {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt || '请分析这张参考图并反推出可执行的图像提示词。' },
+          ],
+          temperature: tool === 'chat' ? 0.7 : 0.45,
+        }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        lastError = json.error?.message || json.message || `文本服务返回 ${response.status}`;
+        continue;
+      }
+      const message = json.choices?.[0]?.message ?? {};
+      const content = typeof message.content === 'string' ? message.content : typeof message.reasoning_content === 'string' ? message.reasoning_content : '';
+      if (content.trim()) return { text: content.trim(), model };
+      lastError = '模型没有返回文本内容';
+    } catch (error) {
+      lastError = error.message || String(error);
+    }
+  }
+  throw new Error(lastError || '文本处理失败：当前上游没有可用的推理模型。');
+}
+
 async function gateway(req, res, pathName) {
   if (req.method === 'OPTIONS') return send(res, 204, null);
   if (req.method === 'GET' && pathName === '/healthz') return send(res, 200, { ok: true, service: 'zhihui-web' });
@@ -503,6 +557,14 @@ async function gateway(req, res, pathName) {
   }
   const user = tokenUser(req);
   if (!user) return fail(401, '请先登录平台账号');
+  if (req.method === 'POST' && pathName === '/v1/ai/text') {
+    try {
+      const result = await processUpstreamText(body);
+      return send(res, 200, { success: true, text: result.text, model: result.model });
+    } catch (error) {
+      return fail(400, error.message || String(error));
+    }
+  }
   if (req.method === 'GET' && pathName === '/v1/account') return send(res, 200, { success: true, user: safeUser(user) });
   if ((req.method === 'PUT' || req.method === 'PATCH') && pathName === '/v1/account') {
     const nickname = String(body.nickname || body.displayName || '').trim();

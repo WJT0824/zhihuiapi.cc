@@ -941,6 +941,7 @@ export function App() {
         const result = await window.zhihui.ai.processText({
           tool: nodeTool as "chat" | "polish-prompt" | "reverse-prompt",
           prompt: inputText,
+          model: String(node.params.inferenceModel || "GPT-5.5"),
           referenceAssetIds: upstream.assetIds,
         });
         const completed: CanvasNode = {
