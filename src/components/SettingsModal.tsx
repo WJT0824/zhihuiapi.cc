@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AppSettings, TokenFluxModel } from "@/types/domain";
+import { isImageModelName, normalizeModelTags } from "@/services/modelTags";
 
 export function SettingsModal({
   open,
@@ -32,7 +33,7 @@ export function SettingsModal({
   const mergedModels = (() => {
     const seen = new Set<string>();
     const all: TokenFluxModel[] = [];
-    for (const model of models) {
+    for (const model of normalizeModelTags(models)) {
       if (!seen.has(model.id)) {
         seen.add(model.id);
         all.push(model);
@@ -54,8 +55,8 @@ export function SettingsModal({
     return all;
   })();
   const modelKind = (model: TokenFluxModel) => {
-    const isImage = model.tags.includes("text-to-image") || model.tags.includes("image-editing");
-    const isReasoning = model.tags.includes("reasoning");
+    const isImage = isImageModelName(`${model.id} ${model.name || ""}`) || model.tags.includes("text-to-image") || model.tags.includes("image-editing");
+    const isReasoning = !isImage && model.tags.includes("reasoning");
     if (isImage && isReasoning) return " · 图像/推理";
     if (isImage) return " · 图像";
     if (isReasoning) return " · 推理";

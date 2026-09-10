@@ -34,6 +34,7 @@ import { Inspector } from "@/components/Inspector";
 import { SettingsModal } from "@/components/SettingsModal";
 import { WalletModal } from "@/components/WalletModal";
 import { createNode, createTemplateNode, getPromptFromNode, upsertNode } from "@/services/projectFactory";
+import { normalizeModelTags } from "@/services/modelTags";
 
 type Tab = "templates" | "assets" | "projects";
 type ConnectionDraft = { sourceNode: string; sourcePort: string };
@@ -322,7 +323,7 @@ export function App() {
       setAssets(await window.zhihui.assets.list(initialProject.id));
       window.zhihui.ai
         .listModels()
-        .then(setModels)
+        .then((list) => setModels(normalizeModelTags(list)))
         .catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
     })();
   }, []);
@@ -1381,8 +1382,9 @@ export function App() {
                 }
               }
               if (!seen.has("gpt-image-2")) merged.unshift({ id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] });
-              try { localStorage.setItem("zh_models", JSON.stringify(merged)); } catch {}
-              return merged;
+              const normalized = normalizeModelTags(merged);
+              try { localStorage.setItem("zh_models", JSON.stringify(normalized)); } catch {}
+              return normalized;
             });
           }}
           onSave={async (next) => {
