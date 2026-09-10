@@ -417,6 +417,8 @@ async function adminPage() {
   try { d = await api('/v1/admin/dashboard'); }
   catch { try { const old = await api('/api/v1/admin/overview'); d = { stats: old.metrics, users: old.users, jobs: old.tasks || [], workflows: [] }; } catch {} }
   if (!d) return workspaceShell(`<div class="empty">需要管理员权限</div>`, 'admin');
+  let aiConfig = {};
+  try { const cfg = await api('/v1/admin/ai-config'); aiConfig = cfg.config || {}; } catch {}
   const stats = d.stats || {};
   const userRows = (d.users || []).slice(-12).reverse().map((u) => `<tr><td>${esc(u.nickname || u.email || u.username || '')}</td><td>${esc(u.email || '')}</td><td>${u.role}</td><td>${money(u.points ?? u.credits)}</td><td>${new Date(u.createdAt).toLocaleString('zh-CN')}</td></tr>`).join('');
   const jobRows = (d.jobs || []).slice(0, 12).map((j) => `<tr><td>${esc(j.prompt || (j.requestId || '').slice(0, 12))}</td><td>${taskStatusLabel(j)}</td><td>${esc(j.model || '')}</td><td>${j.cost ?? ''}</td><td>${new Date(j.createdAt).toLocaleString('zh-CN')}</td></tr>`).join('');
@@ -424,7 +426,7 @@ async function adminPage() {
   return workspaceShell(`<div style="max-width:1100px;margin:0 auto;padding:24px 18px">
     <div class="stats">${Object.entries({ 用户: stats.users, 任务: stats.jobs, 积分总量: stats.credits, 成功任务: stats.succeeded }).map(([k, v]) => `<div class="stat"><b>${v ?? 0}</b><span>${k}</span></div>`).join('')}</div>
     <div class="panel-card"><h3 style="margin-bottom:14px">生成充值码</h3><form id="admin-code-form" style="display:flex;gap:10px;flex-wrap:wrap"><input class="input" name="amount" type="number" min="1" placeholder="单码积分" style="width:130px" value="100"><input class="input" name="count" type="number" min="1" placeholder="数量" style="width:100px" value="1"><button class="btn primary">生成</button><p id="code-result" style="width:100%;font-size:12px;color:#09835e;white-space:pre-wrap"></p></form></div>
-    <div class="panel-card"><h3 style="margin-bottom:14px">AI 图像服务</h3><form id="ai-config-form"><div class="form-grid"><label class="field"><span>服务地址</span><input class="input" name="baseUrl" value="https://tokenflux.cloud/" placeholder="https://tokenflux.cloud/"></label><label class="field"><span>模型</span><input class="input" name="model" value="gpt-image-2" placeholder="gpt-image-2"></label></div><label class="field"><span>平台 API Key</span><input class="input" name="apiKey" type="password" placeholder="留空表示不修改当前密钥"></label><button class="btn primary" style="margin-top:14px">保存 AI 服务配置</button><p id="ai-config-result" style="font-size:12px;color:#09835e"></p></form></div>
+    <div class="panel-card"><h3 style="margin-bottom:14px">AI 图像服务（运行时可切换上游）</h3><form id="ai-config-form"><div class="form-grid"><label class="field"><span>上游中转地址</span><input class="input" name="baseUrl" value="${esc(aiConfig.baseUrl || 'https://tokenflux.cloud/')}" placeholder="支持 https://host、https://host/v1 或完整接口地址"></label><label class="field"><span>生成模型</span><input class="input" name="model" value="${esc(aiConfig.model || 'gpt-image-2')}" placeholder="gpt-image-2"></label></div><label class="field"><span>上游 API Key</span><input class="input" name="apiKey" type="password" placeholder="留空表示不修改当前密钥"></label><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button class="btn primary" type="submit">保存并立即生效</button><button class="btn" type="button" id="ai-config-test">测试并读取模型</button></div><p id="ai-config-result" style="font-size:12px;color:#09835e"></p><p style="font-size:12px;color:#8a94a8;margin-top:8px">切换上游只需填这里并保存，无需重新部署；系统会自动兼容根地址、/v1 和完整接口地址。</p></form></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">工作流上传 / 功能同步</h3><form id="workflow-form"><label class="field"><span>工作流 JSON（可粘贴或上传）</span><textarea class="input" name="workflow" style="min-height:150px" placeholder='{"code":"product-hero","name":"产品主视觉","version":1,...}'></textarea></label><input class="input" type="file" id="workflow-file" accept=".json,application/json" style="margin-top:10px"><button class="btn primary" style="margin-top:14px">上传并发布工作流</button><p id="workflow-result" style="font-size:12px;color:#09835e;white-space:pre-wrap"></p></form></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">已发布工作流</h3><table class="table"><thead><tr><th>名称</th><th>代码</th><th>版本</th><th>状态</th><th>更新时间</th></tr></thead><tbody>${wfRows || '<tr><td colspan="5">暂无工作流</td></tr>'}</tbody></table></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">用户</h3><table class="table"><thead><tr><th>昵称</th><th>邮箱</th><th>角色</th><th>积分</th><th>注册时间</th></tr></thead><tbody>${userRows}</tbody></table></div>
@@ -944,6 +946,17 @@ function bindAdmin() {
       const box = $('#ai-config-result'); if (box) box.textContent = '已保存：' + d.config.baseUrl + ' · ' + d.config.model + ' · 密钥已配置';
       toast('AI 图像服务配置已保存', 'ok');
     } catch (err) { toast(err.message, 'error'); }
+  };
+  const aiTest = $('#ai-config-test'); if (aiTest && aiForm) aiTest.onclick = async () => {
+    const f = Object.fromEntries(new FormData(aiForm));
+    const box = $('#ai-config-result');
+    if (box) box.textContent = '正在测试上游连接…';
+    try {
+      const d = await api('/v1/ai/test-connection', { method: 'POST', body: JSON.stringify({ baseUrl: f.baseUrl, apiKey: f.apiKey, model: f.model, mode: 'models' }) });
+      const ids = (d.models || []).slice(0, 12).map((m) => m.modelId || m.id).join('、');
+      if (box) box.textContent = `${d.message || '连接成功'}${ids ? '：' + ids : ''}`;
+      toast('上游连接正常', 'ok');
+    } catch (err) { if (box) box.textContent = '测试失败：' + err.message; toast(err.message, 'error'); }
   };
   const codeForm = $('#admin-code-form'); if (codeForm) codeForm.onsubmit = async (e) => {
     e.preventDefault(); const f = Object.fromEntries(new FormData(codeForm));

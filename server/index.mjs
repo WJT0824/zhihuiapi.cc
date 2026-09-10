@@ -134,12 +134,33 @@ const publicTask = (task) => ({
   completedAt: task.completedAt || undefined,
 });
 
-const activeAiConfig = () => ({ baseUrl: AI_BASE_URL || store.aiConfig?.baseUrl || '', apiKey: AI_API_KEY || store.aiConfig?.apiKey || '', model: AI_IMAGE_MODEL || store.aiConfig?.model || 'gpt-image-2' });
+const activeAiConfig = () => {
+  const stored = store.aiConfig || {};
+  return {
+    baseUrl: normalizeUpstreamBase(stored.baseUrl || AI_BASE_URL || ''),
+    apiKey: String(stored.apiKey || AI_API_KEY || '').trim(),
+    model: String(stored.model || AI_IMAGE_MODEL || 'gpt-image-2').trim() || 'gpt-image-2',
+  };
+};
 const normalizeUpstreamBase = (value) => String(value || '')
   .trim()
   .replace(/\/+$/, '')
-  .replace(/\/images\/(?:generations|edits)$/i, '')
+  .replace(/\/(?:chat\/completions|images\/(?:generations|edits|models)|models)$/i, '')
+  .replace(/\/v\d+(?:beta)?$/i, '')
   .replace(/\/v\d+$/i, '');
+const publicPluginConfig = () => {
+  const ai = activeAiConfig();
+  return {
+    serviceUrl: 'https://zhihuiapi.cc/',
+    apiOrigin: PUBLIC_API_ORIGIN || 'https://zhihuiapicc-production.up.railway.app/',
+    mode: 0,
+    chatModel: 'gpt-4.1-mini',
+    generationModel: ai.model || 'gpt-image-2',
+    editModel: ai.model || 'gpt-image-2',
+    pointsPerGeneration: 3,
+    updatedAt: now(),
+  };
+};
 const gatewayModels = () => {
   const config = activeAiConfig();
   const model = config.model || 'gpt-image-2';
@@ -176,10 +197,24 @@ const modelsFromPayload = (payload, configModel = '') => {
   return source.map((item) => normalizeLiveModelItem(item, configModel)).filter((model) => model.id);
 };
 const readUpstreamModels = async (baseUrl, apiKey) => {
-  const endpoint = `${normalizeUpstreamBase(baseUrl)}/v1/models`;
-  const response = await fetch(endpoint, { headers: { authorization: `Bearer ${apiKey}` } });
-  if (!response.ok) throw new Error(`模型接口返回 ${response.status}`);
-  return modelsFromPayload(await response.json());
+  const base = normalizeUpstreamBase(baseUrl);
+  const candidates = [`${base}/v1/models`, `${base}/v1/images/models`, `${base}/models`];
+  let lastError;
+  for (const endpoint of candidates) {
+    try {
+      const response = await fetch(endpoint, { headers: { authorization: `Bearer ${apiKey}` } });
+      if (!response.ok) {
+        lastError = new Error(`模型接口返回 ${response.status}`);
+        continue;
+      }
+      const models = modelsFromPayload(await response.json());
+      if (models.length) return models;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (lastError) throw lastError;
+  return [];
 };
 const liveGatewayModels = async () => {
   const config = activeAiConfig();
@@ -263,20 +298,43 @@ async function runGatewayGeneration(job, user, referenceIds, aiOverride) {
   const payload = { model: job.model || ai.model, prompt, size, quality: job.quality || 'auto', n: job.quantity || 1, response_format: 'b64_json' };
   const headers = { authorization: `Bearer ${ai.apiKey}` };
   const upstreamBase = normalizeUpstreamBase(ai.baseUrl);
-  let response;
-  if (refs.length) {
-    const form = new FormData();
-    form.append('model', payload.model); form.append('prompt', prompt); form.append('size', size); form.append('quality', payload.quality); form.append('n', String(payload.n)); form.append('response_format', 'b64_json');
-    for (let i = 0; i < refs.length; i += 1) {
-      const ref = refs[i];
-      const file = await readFile(ref.path);
-      form.append('image', new Blob([file], { type: ref.mimeType || 'image/png' }), ref.fileName || `ref-${i}.png`);
+  const attempt = async (model) => {
+    const nextPayload = { ...payload, model };
+    let response;
+    if (refs.length) {
+      const form = new FormData();
+      form.append('model', model); form.append('prompt', prompt); form.append('size', size); form.append('quality', nextPayload.quality); form.append('n', String(nextPayload.n)); form.append('response_format', 'b64_json');
+      for (let i = 0; i < refs.length; i += 1) {
+        const ref = refs[i];
+        const file = await readFile(ref.path);
+        form.append('image', new Blob([file], { type: ref.mimeType || 'image/png' }), ref.fileName || `ref-${i}.png`);
+      }
+      response = await fetch(`${upstreamBase}/v1/images/edits`, { method: 'POST', headers, body: form });
+    } else {
+      response = await fetch(`${upstreamBase}/v1/images/generations`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(nextPayload) });
     }
-    response = await fetch(`${upstreamBase}/v1/images/edits`, { method: 'POST', headers, body: form });
-  } else {
-    response = await fetch(`${upstreamBase}/v1/images/generations`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(payload) });
+    return { response, json: await response.json().catch(() => ({})) };
+  };
+  const candidates = [payload.model];
+  const first = await attempt(payload.model);
+  let { response, json } = first;
+  const primaryError = json?.error?.message || json?.message || '';
+  if (!response.ok && /model_not_found|no available channel|not found|不存在|不支持/i.test(String(primaryError))) {
+    try {
+      const live = await readUpstreamModels(upstreamBase, ai.apiKey);
+      for (const model of live) {
+        if ((model.tags || []).some((tag) => tag === 'text-to-image' || tag === 'image-editing')) candidates.push(model.modelId || model.id);
+      }
+    } catch {}
+    candidates.push('gpt-image-1.5', 'gpt-image-1', 'dall-e-3');
+    for (const candidate of [...new Set(candidates.filter(Boolean))].slice(1)) {
+      const next = await attempt(candidate);
+      if (next.response.ok) {
+        response = next.response; json = next.json; payload.model = candidate;
+        break;
+      }
+    }
   }
-  const json = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(json.error?.message || json.message || `上游图像服务失败 ${response.status}`);
   let buffer;
   const item = (json.data || [])[0] || {};
@@ -336,19 +394,19 @@ async function gateway(req, res, pathName) {
   if (req.method === 'POST' && pathName === '/v1/ai/test-connection') {
     const platform = activeAiConfig();
     const apiKey = String(body.apiKey || platform.apiKey || '').trim();
-    let baseUrl = String(body.baseUrl || platform.baseUrl || '').trim().replace(/\/+$/, '').replace(/\/v\d+$/i, '');
+    const baseUrl = normalizeUpstreamBase(body.baseUrl || platform.baseUrl || '');
     const mode = String(body.mode || 'models');
     if (!apiKey || !baseUrl) return fail(400, body.apiKey || body.baseUrl ? '请输入 API Key 和服务地址' : '服务器尚未配置默认 AI 服务，请联系管理员在运营后台配置');
     try {
-      const endpoint = mode === 'reasoning' ? '/v1/chat/completions' : '/v1/models';
-      const response = await fetch(baseUrl + endpoint, { headers: { authorization: `Bearer ${apiKey}` } });
-      if (response.ok) {
-        let models = [];
-        if (mode !== 'reasoning') models = modelsFromPayload(await response.json().catch(() => ({})), String(body.model || ''));
-        return send(res, 200, { success: true, message: mode === 'reasoning' ? '推理模型连接成功（平台默认服务）' : `API 连接成功，已读取 ${models.length || ''} 个模型${body.apiKey || body.baseUrl ? '' : '（默认使用平台服务）'}`, models });
+      if (mode === 'reasoning') {
+        const response = await fetch(`${baseUrl}/v1/chat/completions`, { headers: { authorization: `Bearer ${apiKey}` } });
+        if (response.ok) return send(res, 200, { success: true, message: '推理模型连接成功', models: [] });
+        const text = await response.text();
+        return fail(400, `连接失败（${response.status}）：${text.slice(0, 180)}`);
       }
-      const text = await response.text();
-      return fail(400, `连接失败（${response.status}）：${text.slice(0, 180)}`);
+      const models = await readUpstreamModels(baseUrl, apiKey);
+      if (models.length) return send(res, 200, { success: true, message: `API 连接成功，已读取 ${models.length} 个模型${body.apiKey || body.baseUrl ? '' : '（默认使用平台服务）'}`, models });
+      return fail(400, '连接成功，但没有读取到模型列表，请检查中转地址的模型接口。');
     } catch (error) {
       return fail(400, `连接失败：${String(error.message || error).slice(0, 180)}`);
     }
@@ -431,7 +489,7 @@ async function gateway(req, res, pathName) {
   }
   if ((req.method === 'POST' || req.method === 'PUT') && pathName === '/v1/admin/ai-config') {
     const current = activeAiConfig();
-    const baseUrl = String(body.baseUrl !== undefined ? body.baseUrl : current.baseUrl).trim();
+    const baseUrl = normalizeUpstreamBase(body.baseUrl !== undefined ? body.baseUrl : current.baseUrl);
     const apiKey = String(body.apiKey !== undefined ? body.apiKey : current.apiKey).trim();
     const model = String(body.model !== undefined ? body.model : current.model).trim() || 'gpt-image-2';
     if (baseUrl) { try { const u = new URL(baseUrl); if (!/^https?:$/.test(u.protocol)) throw new Error('协议'); } catch { return fail(400, 'AI_BASE_URL 必须是有效的 http/https 地址'); } }
@@ -507,5 +565,5 @@ async function api(req, res, pathName) {
 }
 
 const mime = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.json':'application/json; charset=utf-8', '.svg':'image/svg+xml', '.png':'image/png', '.jpg':'image/jpeg' };
-const server = http.createServer(async (req,res) => { res.setHeader('access-control-allow-origin', process.env.CORS_ORIGIN || '*'); res.setHeader('access-control-allow-headers','authorization, content-type, x-admin-key, x-ai-key, x-ai-base-url'); res.setHeader('access-control-allow-methods','GET, POST, PUT, PATCH, DELETE, OPTIONS'); res.setHeader('x-content-type-options','nosniff'); res.setHeader('x-frame-options','DENY'); const { path: p } = route(req); if (p.startsWith('/api/')) return api(req,res,p); if (p === '/healthz' || p.startsWith('/v1/')) return gateway(req,res,p); let file = path.join(PUBLIC_DIR, p === '/' ? 'index.html' : p); if (!file.startsWith(PUBLIC_DIR)) return send(res,403,{error:'forbidden'}); if (existsSync(file) && statSync(file).isDirectory()) file = path.join(file, 'index.html'); if (!existsSync(file)) file = path.join(PUBLIC_DIR,'index.html'); try { res.writeHead(200, {'content-type': mime[path.extname(file)] || mime['.html']}); createReadStream(file).pipe(res); } catch { send(res,500,{error:'server error'}); } });
+const server = http.createServer(async (req,res) => { res.setHeader('access-control-allow-origin', process.env.CORS_ORIGIN || '*'); res.setHeader('access-control-allow-headers','authorization, content-type, x-admin-key, x-ai-key, x-ai-base-url'); res.setHeader('access-control-allow-methods','GET, POST, PUT, PATCH, DELETE, OPTIONS'); res.setHeader('x-content-type-options','nosniff'); res.setHeader('x-frame-options','DENY'); const { path: p } = route(req); if (p === '/plugin-config.json') return send(res, 200, publicPluginConfig()); if (p.startsWith('/api/')) return api(req,res,p); if (p === '/healthz' || p.startsWith('/v1/')) return gateway(req,res,p); let file = path.join(PUBLIC_DIR, p === '/' ? 'index.html' : p); if (!file.startsWith(PUBLIC_DIR)) return send(res,403,{error:'forbidden'}); if (existsSync(file) && statSync(file).isDirectory()) file = path.join(file, 'index.html'); if (!existsSync(file)) file = path.join(PUBLIC_DIR,'index.html'); try { res.writeHead(200, {'content-type': mime[path.extname(file)] || mime['.html']}); createReadStream(file).pipe(res); } catch { send(res,500,{error:'server error'}); } });
 await load(); server.listen(PORT, HOST, () => console.log(`Zhihui web listening on http://${HOST}:${PORT}`));
