@@ -135,6 +135,11 @@ const publicTask = (task) => ({
 });
 
 const activeAiConfig = () => ({ baseUrl: AI_BASE_URL || store.aiConfig?.baseUrl || '', apiKey: AI_API_KEY || store.aiConfig?.apiKey || '', model: AI_IMAGE_MODEL || store.aiConfig?.model || 'gpt-image-2' });
+const normalizeUpstreamBase = (value) => String(value || '')
+  .trim()
+  .replace(/\/+$/, '')
+  .replace(/\/images\/(?:generations|edits)$/i, '')
+  .replace(/\/v\d+$/i, '');
 const gatewayModels = () => {
   const config = activeAiConfig();
   const model = config.model || 'gpt-image-2';
@@ -171,7 +176,7 @@ const modelsFromPayload = (payload, configModel = '') => {
   return source.map((item) => normalizeLiveModelItem(item, configModel)).filter((model) => model.id);
 };
 const readUpstreamModels = async (baseUrl, apiKey) => {
-  const endpoint = `${String(baseUrl || '').replace(/\/+$/, '')}/v1/models`;
+  const endpoint = `${normalizeUpstreamBase(baseUrl)}/v1/models`;
   const response = await fetch(endpoint, { headers: { authorization: `Bearer ${apiKey}` } });
   if (!response.ok) throw new Error(`模型接口返回 ${response.status}`);
   return modelsFromPayload(await response.json());
@@ -257,6 +262,7 @@ async function runGatewayGeneration(job, user, referenceIds, aiOverride) {
   const size = outputSize(job.aspectRatio, job.resolution);
   const payload = { model: job.model || ai.model, prompt, size, quality: job.quality || 'auto', n: job.quantity || 1, response_format: 'b64_json' };
   const headers = { authorization: `Bearer ${ai.apiKey}` };
+  const upstreamBase = normalizeUpstreamBase(ai.baseUrl);
   let response;
   if (refs.length) {
     const form = new FormData();
@@ -266,9 +272,9 @@ async function runGatewayGeneration(job, user, referenceIds, aiOverride) {
       const file = await readFile(ref.path);
       form.append('image', new Blob([file], { type: ref.mimeType || 'image/png' }), ref.fileName || `ref-${i}.png`);
     }
-    response = await fetch(`${ai.baseUrl.replace(/\/+$/, '')}/v1/images/edits`, { method: 'POST', headers, body: form });
+    response = await fetch(`${upstreamBase}/v1/images/edits`, { method: 'POST', headers, body: form });
   } else {
-    response = await fetch(`${ai.baseUrl.replace(/\/+$/, '')}/v1/images/generations`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(payload) });
+    response = await fetch(`${upstreamBase}/v1/images/generations`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(payload) });
   }
   const json = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(json.error?.message || json.message || `上游图像服务失败 ${response.status}`);
