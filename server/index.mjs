@@ -223,8 +223,10 @@ const readUpstreamModels = async (baseUrl, apiKey) => {
   if (lastError) throw lastError;
   return [];
 };
-const liveGatewayModels = async () => {
-  const config = activeAiConfig();
+const liveGatewayModels = async (override) => {
+  const config = override?.baseUrl && override?.apiKey
+    ? { ...activeAiConfig(), baseUrl: normalizeUpstreamBase(override.baseUrl), apiKey: String(override.apiKey).trim() }
+    : activeAiConfig();
   if (!config.baseUrl || !config.apiKey) return gatewayModels();
   try {
     const live = await readUpstreamModels(config.baseUrl, config.apiKey);
@@ -564,7 +566,12 @@ async function gateway(req, res, pathName) {
   if (!user) return fail(401, '请先登录平台账号');
   if (req.method === 'POST' && pathName === '/v1/ai/text') {
     try {
-      const result = await processUpstreamText(body);
+      const accountAi = user.profile?.settings || {};
+      const result = await processUpstreamText({
+        ...body,
+        apiKey: body.apiKey || accountAi.tokenFluxApiKey,
+        baseUrl: body.baseUrl || accountAi.tokenFluxBaseUrl,
+      });
       return send(res, 200, { success: true, text: result.text, model: result.model });
     } catch (error) {
       return fail(400, error.message || String(error));
@@ -583,8 +590,13 @@ async function gateway(req, res, pathName) {
     await persist();
     return send(res, 200, { success: true, user: safeUser(user) });
   }
-  if (req.method === 'GET' && pathName === '/v1/models') return send(res, 200, { success: true, models: await liveGatewayModels() });
-  if (req.method === 'GET' && pathName === '/v1/image/models') return send(res, 200, { success: true, models: await liveGatewayModels() });
+  if (req.method === 'GET' && (pathName === '/v1/models' || pathName === '/v1/image/models')) {
+    const accountAi = user.profile?.settings || {};
+    const accountOverride = accountAi.tokenFluxBaseUrl && accountAi.tokenFluxApiKey
+      ? { baseUrl: accountAi.tokenFluxBaseUrl, apiKey: accountAi.tokenFluxApiKey }
+      : undefined;
+    return send(res, 200, { success: true, models: await liveGatewayModels(accountOverride) });
+  }
   if (req.method === 'POST' && pathName === '/v1/image/references') {
     if (!files.length) return fail(400, '没有收到参考图');
     const result = [];
@@ -614,7 +626,10 @@ async function gateway(req, res, pathName) {
     store.jobs.push(job); store.ledger.push({ id: uid(), userId: user.id, type: 'image', points: user.role === 'admin' ? 0 : -cost, requestId, createdAt: now() }); await persist();
     const overrideBaseUrl = String(body.baseUrl || body.ai_base_url || req.headers['x-ai-base-url'] || '').trim();
     const overrideApiKey = String(body.apiKey || body.ai_api_key || req.headers['x-ai-key'] || '').trim();
-    const aiOverride = overrideBaseUrl && overrideApiKey ? { baseUrl: overrideBaseUrl, apiKey: overrideApiKey } : undefined;
+    const accountAi = user.profile?.settings || {};
+    const aiOverride = overrideBaseUrl && overrideApiKey
+      ? { baseUrl: overrideBaseUrl, apiKey: overrideApiKey }
+      : (accountAi.tokenFluxBaseUrl && accountAi.tokenFluxApiKey ? { baseUrl: accountAi.tokenFluxBaseUrl, apiKey: accountAi.tokenFluxApiKey } : undefined);
     const maskId = String(body.mask_id || body.maskId || '').trim();
     try { await runGatewayGeneration(job, user, Array.isArray(body.reference_ids) ? body.reference_ids : [], aiOverride, maskId); await persist(); }
     catch (err) { if (user.role !== 'admin') user.points += cost; job.status = 'failed'; job.error = String(err.message || err).slice(0, 500); store.ledger.push({ id: uid(), userId: user.id, type: 'image-refund', points: user.role === 'admin' ? 0 : cost, requestId, createdAt: now() }); await persist(); }

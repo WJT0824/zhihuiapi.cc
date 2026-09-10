@@ -238,6 +238,19 @@ export const mockApi: ZhihuiApi = {
       };
       const collected: Array<{ id: string; name: string; tags: string[] }> = [];
       try {
+        const token = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
+        const savedKey = String(mockSettings.tokenFluxApiKey ?? "").trim();
+        const savedBase = String(mockSettings.tokenFluxBaseUrl ?? "").trim();
+        if (token && savedKey && savedBase) {
+          const syncOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
+          await fetch(`${syncOrigin}/v1/account`, {
+            method: "PUT",
+            headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+            body: JSON.stringify({ settings: { tokenFluxBaseUrl: savedBase, tokenFluxApiKey: savedKey } }),
+          });
+        }
+      } catch {}
+      try {
         const platformOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
         const platformToken = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
         const platformResponse = await fetch(`${platformOrigin}/v1/models`, { headers: platformToken ? { authorization: `Bearer ${platformToken}` } : {} });
@@ -495,6 +508,24 @@ export const mockApi: ZhihuiApi = {
     async set(settings: AppSettings) {
       Object.assign(mockSettings, settings);
       persistSettings(mockSettings);
+      try {
+        const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
+        const token = localStorage.getItem("zh_token");
+        if (token) {
+          await fetch(`${apiOrigin}/v1/account`, {
+            method: "PUT",
+            headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+            body: JSON.stringify({
+              settings: {
+                tokenFluxBaseUrl: mockSettings.tokenFluxBaseUrl || "",
+                tokenFluxApiKey: mockSettings.tokenFluxApiKey || "",
+                defaultModel: mockSettings.defaultModel,
+                defaultRatio: mockSettings.defaultRatio,
+              },
+            }),
+          });
+        }
+      } catch {}
       return mockSettings;
     },
     async testApiKey(apiKey?: string, baseUrl?: string, mode: "models" | "image" | "reasoning" = "models") {
