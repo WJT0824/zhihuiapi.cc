@@ -105,6 +105,9 @@ textarea.input{min-height:92px;resize:vertical;line-height:1.6}
 .task-list{display:grid;gap:10px}
 .task-card{display:flex;gap:12px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:14px;background:#fff}
 .task-card img,.task-card video{width:74px;height:58px;object-fit:cover;border-radius:9px}
+.task-thumb-slot{flex:0 0 74px;width:74px;height:58px;border-radius:9px;background:linear-gradient(100deg,#eef2f9 20%,#f7f9fd 40%,#eef2f9 60%);background-size:200% 100%;animation:task-thumb-loading 1.4s ease-in-out infinite}
+.task-thumb-slot.empty{background:#f1f4fa;animation:none}
+@keyframes task-thumb-loading{0%{background-position:120% 0}100%{background-position:-20% 0}}
 .badge{font-size:11px;padding:4px 9px;border-radius:99px;font-weight:800}
 .badge.done{background:#e8fbf2;color:#07996c}.badge.proc{background:#efecff;color:#6d4df5}.badge.fail{background:#ffecec;color:#d9434a}
 .empty{padding:48px 10px;text-align:center;color:#98a2b8;font-size:13px}

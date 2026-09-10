@@ -622,7 +622,10 @@ async function gateway(req, res, pathName) {
   }
   const jobMatch = pathName.match(/^\/v1\/image\/jobs\/([^/]+)$/);
   if (req.method === 'GET' && jobMatch) { const job = store.jobs.find((j) => j.id === jobMatch[1] && j.userId === user.id); return job ? send(res, 200, gatewayJob(job)) : fail(404, '任务不存在'); }
-  if (req.method === 'GET' && pathName === '/v1/image/history') return send(res, 200, { success: true, history: store.jobs.filter((j) => j.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100).map(gatewayJob) });
+  if (req.method === 'GET' && pathName === '/v1/image/history') {
+    const limit = Math.max(1, Math.min(50, Number(route(req).query.get('limit')) || 24));
+    return send(res, 200, { success: true, history: store.jobs.filter((j) => j.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit).map(gatewayJob) });
+  }
   if (req.method === 'DELETE' && pathName === '/v1/image/history') {
     const ids = new Set([
       ...(Array.isArray(body.job_ids) ? body.job_ids : []),

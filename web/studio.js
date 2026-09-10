@@ -358,18 +358,55 @@ async function taskThumb(job) {
 async function historyPage() {
   let jobs = [];
   let source = 'job';
-  try { const d = await api('/v1/image/history'); jobs = (d.history || []).map((j) => ({ ...j, id: j.id || j.jobId, source: 'job' })); }
+  try { const d = await api('/v1/image/history?limit=24'); jobs = (d.history || []).map((j) => ({ ...j, id: j.id || j.jobId, source: 'job' })); }
   catch { try { const d = await api('/api/v1/tasks'); jobs = (d.tasks || []).map((t) => ({ id: t.id, status: t.status, prompt: t.prompt, modelId: t.model, createdAt: t.createdAt, error: t.error, source: 'task' })); source = 'task'; } catch {} }
-  const rows = await Promise.all(jobs.slice(0, 40).map(async (j) => {
-    const thumb = j.assetId || j.asset ? await taskThumb(j) : '';
+  const rows = jobs.slice(0, 24).map((j) => {
+    const thumb = j.assetId || j.asset
+      ? `<div class="task-thumb-slot" data-thumb-asset="${esc(j.assetId || j.asset)}"></div>`
+      : '<div class="task-thumb-slot empty"></div>';
     return `<div class="task-card"><label style="display:flex;align-items:center"><input type="checkbox" data-task-check data-task-id="${esc(j.id)}" data-task-source="${j.source}"></label>${thumb}<div style="flex:1;min-width:0"><div style="font-weight:750">${esc(j.prompt || '未命名任务')}</div><div style="font-size:12px;color:#8a94a8">${esc(j.modelId || j.model || '')} · ${new Date(j.createdAt).toLocaleString('zh-CN')}</div>${j.error ? `<div style="font-size:12px;color:#d9434a;margin-top:4px">${esc(j.error)}</div>` : ''}</div>${taskStatusLabel(j)}<button class="btn" style="margin-left:10px" data-action="delete-task" data-task-id="${esc(j.id)}" data-task-source="${j.source}">删除</button></div>`;
-  }));
+  });
   const items = rows.length ? rows.join('') : '<div class="empty">还没有生成记录，去创作台发起第一次生成吧。</div>';
   const toolbar = rows.length ? `<div class="toolbar" style="display:flex;gap:10px;align-items:center;margin-bottom:14px"><label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="checkbox" id="task-select-all"> 全选</label><button class="btn" id="task-delete-selected" disabled>删除选中</button><span id="task-select-count" style="font-size:12px;color:#8a94a8">已选 0 项</span></div>` : '';
   return workspaceShell(`<div style="max-width:1080px;margin:0 auto;padding:26px 18px"><div class="panel-card"><h3 style="margin-bottom:18px">云端生成记录</h3>${toolbar}<div class="task-list">${items}</div></div></div>`, 'history');
 }
 
 function bindHistory() {
+  const thumbSlots = Array.from(document.querySelectorAll('[data-thumb-asset]'));
+  if (window.__taskThumbObserver) window.__taskThumbObserver.disconnect();
+  if (thumbSlots.length) {
+    const pending = [];
+    let active = 0;
+    const loadOne = async (slot) => {
+      const assetId = slot.dataset.thumbAsset;
+      if (!assetId || slot.dataset.thumbLoaded) return;
+      slot.dataset.thumbLoaded = '1';
+      active += 1;
+      try {
+        const res = await fetch(`${API_ORIGIN}/v1/image/assets/${encodeURIComponent(assetId)}`, { headers: { authorization: 'Bearer ' + state.token } });
+        if (res.ok) {
+          const url = URL.createObjectURL(await res.blob());
+          slot.innerHTML = `<img src="${url}" alt="result" loading="lazy" data-action="preview" data-url="${url}">`;
+        }
+      } catch {}
+      active -= 1;
+      if (pending.length) void loadOne(pending.shift());
+    };
+    const enqueue = (slot) => { pending.push(slot); if (active < 3) void loadOne(pending.shift()); };
+    if (typeof IntersectionObserver === 'function') {
+      const observer = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          observer.unobserve(entry.target);
+          enqueue(entry.target);
+        }
+      }, { rootMargin: '240px' });
+      thumbSlots.forEach((slot) => observer.observe(slot));
+      window.__taskThumbObserver = observer;
+    } else {
+      thumbSlots.slice(0, 6).forEach((slot) => enqueue(slot));
+    }
+  }
   const checks = Array.from(document.querySelectorAll('[data-task-check]'));
   const selectAll = document.querySelector('#task-select-all');
   const countBox = document.querySelector('#task-select-count');
@@ -405,7 +442,7 @@ function walletPage() {
   const points = state.user ? state.user.points ?? state.user.credits : 0;
   return workspaceShell(`<div style="max-width:860px;margin:0 auto;padding:26px 18px">
     <div class="panel-card"><h3 style="margin-bottom:12px">可用积分</h3><div class="stats"><div class="stat"><b>${money(points)}</b><span>积分余额</span></div><div class="stat"><b>10</b><span>每次生成消耗</span></div><div class="stat"><b>平台</b><span>服务模式</span></div><div class="stat"><b>∞</b><span>云端记录</span></div></div></div>
-    <div class="panel-card"><h3 style="margin-bottom:14px">积分兑换</h3><form id="redeem-form"><label class="field"><span>兑换码</span><input class="input" name="code" required placeholder="输入 ZH- 开头的兑换码"></label><button class="btn primary" style="margin-top:14px">立即兑换</button></form><p class="error-note" id="redeem-error"></p></div>
+    <div class="panel-card"><h3 style="margin-bottom:14px">积分兑换</h3><form id="redeem-form"><label class="field"><span>兑换码</span><input class="input" name="code" required placeholder="输入 ZHRC1 开头的积分访问码"></label><button class="btn primary" style="margin-top:14px">立即兑换</button></form><p class="error-note" id="redeem-error"></p></div>
   </div>`, 'wallet');
 }
 
