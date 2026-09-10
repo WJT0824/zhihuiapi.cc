@@ -222,6 +222,16 @@ export const mockApi: ZhihuiApi = {
         try { localStorage.setItem("zh_models", JSON.stringify(list)); } catch {}
         return list;
       };
+      try {
+        const platformOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
+        const platformToken = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
+        const platformResponse = await fetch(`${platformOrigin}/v1/models`, { headers: platformToken ? { authorization: `Bearer ${platformToken}` } : {} });
+        if (platformResponse.ok) {
+          const platformPayload = await platformResponse.json();
+          const platformModels = normalizeList((platformPayload.models || platformPayload.data || []) as Array<{ id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }>);
+          if (platformModels.length) return cacheModels(platformModels);
+        }
+      } catch {}
       const apiKey = String(mockSettings.tokenFluxApiKey ?? "").trim();
       const customBase = String(mockSettings.tokenFluxBaseUrl ?? "").trim().replace(/\/+$/, "");
       if (apiKey && customBase) {
