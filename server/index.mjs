@@ -263,6 +263,23 @@ const imageGatewayModels = async () => {
   }
   return [...ordered.values()];
 };
+const mergeGatewayModelLists = (...lists) => {
+  const merged = new Map();
+  for (const list of lists) {
+    for (const model of list || []) {
+      const key = String(model.modelId || model.id || '').toLowerCase();
+      if (!key) continue;
+      const existing = merged.get(key);
+      if (!existing) {
+        merged.set(key, model);
+        continue;
+      }
+      const tags = [...new Set([...(existing.tags || []), ...(model.tags || [])])];
+      merged.set(key, { ...existing, name: existing.name || model.name, displayName: existing.displayName || model.displayName, tags });
+    }
+  }
+  return [...merged.values()];
+};
 const normalizeRechargeAccount = (value) => String(value || '').trim().replace(/\s+/g, '').toLowerCase();
 const decodeBase64Url = (value) => {
   const normalized = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
@@ -595,7 +612,9 @@ async function gateway(req, res, pathName) {
     const accountOverride = accountAi.tokenFluxBaseUrl && accountAi.tokenFluxApiKey
       ? { baseUrl: accountAi.tokenFluxBaseUrl, apiKey: accountAi.tokenFluxApiKey }
       : undefined;
-    return send(res, 200, { success: true, models: await liveGatewayModels(accountOverride) });
+    const platformModels = await liveGatewayModels();
+    const accountModels = accountOverride ? await liveGatewayModels(accountOverride) : [];
+    return send(res, 200, { success: true, models: mergeGatewayModelLists(gatewayModels(), platformModels, accountModels) });
   }
   if (req.method === 'POST' && pathName === '/v1/image/references') {
     if (!files.length) return fail(400, '没有收到参考图');
