@@ -537,6 +537,14 @@ button:disabled {
   overflow: visible;
   pointer-events: none;
 }
+.edge-layer .edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 18;
+  pointer-events: stroke;
+  cursor: grab;
+}
+.edge-layer .edge-hit:active { cursor: grabbing; }
 
 .edge-layer path {
   fill: none;

@@ -344,6 +344,26 @@ export function InfiniteCanvas({
     if (selected.length < 2) return;
     const selectedIds = new Set(selected.map((node) => node.id));
     const groupId = nanoid();
+    const nextEdges = [...project.graph.edges];
+    const hasEdge = (sourceNode: string, sourcePort: string, targetNode: string, targetPort: string) =>
+      nextEdges.some((edge) => edge.sourceNode === sourceNode && edge.sourcePort === sourcePort && edge.targetNode === targetNode && edge.targetPort === targetPort);
+    const connect = (source: CanvasNode, sourcePort: string, target: CanvasNode, targetPort: string) => {
+      if (source.id === target.id || hasEdge(source.id, sourcePort, target.id, targetPort)) return;
+      nextEdges.push({ id: nanoid(), sourceNode: source.id, sourcePort, targetNode: target.id, targetPort });
+    };
+    const textSources = selected.filter((node) => node.type === "prompt");
+    const imageSources = selected.filter((node) => node.type === "image");
+    const aiTargets = selected.filter((node) => node.type === "ai-generate");
+    for (const target of aiTargets) {
+      const promptPort = target.inputs.includes("prompt") ? "prompt" : pickTargetPort(target, "prompt");
+      const imagePort = target.inputs.includes("image") ? "image" : pickTargetPort(target, "image");
+      for (const source of textSources) connect(source, "prompt", target, promptPort);
+      for (const source of imageSources) connect(source, "image", target, imagePort);
+    }
+    const syncedPrompt = textSources
+      .map((node) => String(node.params.prompt ?? "").trim())
+      .filter(Boolean)
+      .join("\n");
     const depthCache = new Map<string, number>();
     const resolveDepth = (nodeId: string, visiting = new Set<string>()): number => {
       const cached = depthCache.get(nodeId);
@@ -351,7 +371,7 @@ export function InfiniteCanvas({
       if (visiting.has(nodeId)) return 0;
       visiting.add(nodeId);
       let depth = 0;
-      for (const edge of project.graph.edges) {
+      for (const edge of nextEdges) {
         if (edge.targetNode !== nodeId || !selectedIds.has(edge.sourceNode) || edge.sourceNode === nodeId) continue;
         depth = Math.max(depth, resolveDepth(edge.sourceNode, visiting) + 1);
       }
@@ -380,24 +400,34 @@ export function InfiniteCanvas({
       columnXs[depth] = cursorX;
       cursorX += columnWidths[depth] + gapX;
     }
-    const placed = new Map<string, { x: number; y: number }>();
-    const columnCursorY: Record<number, number> = {};
+    const gapY = 80;
+    const layerRanks: Record<number, CanvasNode[]> = {};
+    const layerHeights: Record<number, number> = {};
+    const orderRank = (node: CanvasNode) => (node.type === "prompt" ? 0 : node.type === "image" ? 1 : node.type === "ai-generate" ? 2 : 3);
     for (const depth of sortedDepths) {
-      const layer = [...(layers.get(depth) ?? [])].sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
-      columnCursorY[depth] = Math.max(30, minY);
-      const gapY = 90;
-      for (const node of layer) {
+      const layer = [...(layers.get(depth) ?? [])].sort(
+        (a, b) => orderRank(a) - orderRank(b) || a.position.y - b.position.y || a.position.x - b.position.x,
+      );
+      layerRanks[depth] = layer;
+      layerHeights[depth] = layer.reduce((sum, node) => sum + getVisualNodeSize(node).height, 0) + Math.max(0, layer.length - 1) * gapY;
+    }
+    const centerY = Math.max(60, minY) + Math.max(...Object.values(layerHeights), 0) / 2;
+    const placed = new Map<string, { x: number; y: number }>();
+    for (const depth of sortedDepths) {
+      let cursorY = Math.max(40, centerY - layerHeights[depth] / 2);
+      for (const node of layerRanks[depth]) {
         const size = getVisualNodeSize(node);
-        placed.set(node.id, { x: columnXs[depth], y: columnCursorY[depth] });
-        columnCursorY[depth] += size.height + gapY;
+        placed.set(node.id, { x: columnXs[depth], y: cursorY });
+        cursorY += size.height + gapY;
       }
     }
     const arranged = project.graph.nodes.map((node) => {
       const next = placed.get(node.id);
       if (!next) return node;
-      return { ...node, groupId, position: next };
+      const params = node.type === "ai-generate" && syncedPrompt ? { ...node.params, prompt: syncedPrompt } : node.params;
+      return { ...node, groupId, position: next, params };
     });
-    onChange({ ...project, graph: { ...project.graph, nodes: arranged } });
+    onChange({ ...project, graph: { ...project.graph, nodes: arranged, edges: nextEdges } });
     setMultiSelectedIds(selected.map((node) => node.id));
   }
 
@@ -842,12 +872,25 @@ export function InfiniteCanvas({
             const start = portPoint(source, "output", edge.sourcePort);
             const end = portPoint(target, "input", edge.targetPort);
             const running = source.status === "running" || target.status === "running";
+            const pathData = `M ${start.x} ${start.y} C ${start.x + 110} ${start.y}, ${end.x - 110} ${end.y}, ${end.x} ${end.y}`;
             return (
-              <path
-                key={edge.id}
-                className={running ? "edge-running" : undefined}
-                d={`M ${start.x} ${start.y} C ${start.x + 110} ${start.y}, ${end.x - 110} ${end.y}, ${end.x} ${end.y}`}
-              />
+              <g key={edge.id}>
+                <path
+                  className="edge-hit"
+                  d={pathData}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    const point = toWorld(event.clientX, event.clientY);
+                    onChange({
+                      ...project,
+                      graph: { ...project.graph, edges: project.graph.edges.filter((item) => item.id !== edge.id) },
+                    });
+                    setContextMenu(undefined);
+                    setConnecting({ sourceNode: edge.sourceNode, sourcePort: edge.sourcePort, x: point.worldX, y: point.worldY });
+                  }}
+                />
+                <path className={running ? "edge-running" : undefined} d={pathData} />
+              </g>
             );
           })}
           {connecting && (
