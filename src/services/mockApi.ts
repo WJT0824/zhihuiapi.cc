@@ -554,6 +554,14 @@ export const mockApi: ZhihuiApi = {
                 tags: Array.isArray(item.tags) && item.tags.length ? item.tags.map(String) : mode === "models" ? ["reasoning"] : ["image-editing"],
               }))
           : [];
+        if (!response.ok && !models.length) {
+          try {
+            const cached = JSON.parse(localStorage.getItem("zh_models") || "[]");
+            if (Array.isArray(cached) && cached.length) {
+              return { ok: true, message: `${payload.message || payload.error || "上游暂时不可用，已使用本地缓存模型"}`, models: cached };
+            }
+          } catch {}
+        }
         return { ok: response.ok, message: payload.message || payload.error || payload.detail || "连接失败", models };
       } catch {
         return { ok: false, message: "连接失败：无法访问测试接口，请检查网络后重试" };

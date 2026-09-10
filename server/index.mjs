@@ -34,7 +34,7 @@ const uid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const passwordHash = (value, salt) => crypto.scryptSync(value, salt, 64).toString('hex');
-const defaultStore = () => ({ users: [], tasks: [], redemptionCodes: [], redemptions: [], rechargeNonces: [], ledger: [], sessions: {}, references: [], jobs: [], assets: [], workflows: [], aiConfig: { baseUrl: '', apiKey: '', model: '' } });
+const defaultStore = () => ({ users: [], tasks: [], redemptionCodes: [], redemptions: [], rechargeNonces: [], ledger: [], sessions: {}, references: [], jobs: [], assets: [], workflows: [], modelCache: [], aiConfig: { baseUrl: '', apiKey: '', model: '' } });
 let store = defaultStore();
 async function load() {
   await mkdir(DATA_DIR, { recursive: true });
@@ -42,7 +42,7 @@ async function load() {
   await mkdir(REF_DIR, { recursive: true });
   await mkdir(DOWNLOAD_DIR, { recursive: true });
   if (existsSync(DATA_FILE)) { try { store = JSON.parse(await readFile(DATA_FILE, 'utf8')); } catch { store = defaultStore(); } }
-  store.tasks ||= []; store.redemptionCodes ||= []; store.redemptions ||= []; store.rechargeNonces ||= []; store.ledger ||= []; store.sessions ||= {}; store.references ||= []; store.jobs ||= []; store.assets ||= []; store.workflows ||= []; store.aiConfig ||= { baseUrl: '', apiKey: '', model: '' };
+  store.tasks ||= []; store.redemptionCodes ||= []; store.redemptions ||= []; store.rechargeNonces ||= []; store.ledger ||= []; store.sessions ||= {}; store.references ||= []; store.jobs ||= []; store.assets ||= []; store.workflows ||= []; store.modelCache ||= []; store.aiConfig ||= { baseUrl: '', apiKey: '', model: '' };
   if (!store.users.length) {
     const passwordSalt = crypto.randomBytes(16).toString('hex');
     store.users.push({ id: uid(), nickname: 'admin', email: '', passwordSalt, passwordHash: passwordHash(ADMIN_KEY, passwordSalt), points: 1000, role: 'admin', createdAt: now() });
@@ -239,7 +239,12 @@ const liveGatewayModels = async (override) => {
       const key = model.modelId || model.id;
       if (key && !ordered.has(key)) ordered.set(key, model);
     }
-    return [...ordered.values()];
+    const merged = [...ordered.values()];
+    if (merged.length > 1) {
+      store.modelCache = merged;
+      void persist();
+    }
+    return merged;
   } catch {
     return gatewayModels();
   }
@@ -576,6 +581,16 @@ async function gateway(req, res, pathName) {
       if (models.length) return send(res, 200, { success: true, message: `API 连接成功，已读取 ${models.length} 个模型${body.apiKey || body.baseUrl ? '' : '（默认使用平台服务）'}`, models });
       return fail(400, '连接成功，但没有读取到模型列表，请检查中转地址的模型接口。');
     } catch (error) {
+      const fallback = mergeGatewayModelLists(store.modelCache || [], gatewayModels());
+      if (fallback.length) {
+        const reason = String(error.message || error).slice(0, 120);
+        return send(res, 200, {
+          success: true,
+          message: `上游模型接口暂时不可用（${reason}），已使用平台缓存/默认模型列表`,
+          models: fallback,
+          degraded: true,
+        });
+      }
       return fail(400, `连接失败：${String(error.message || error).slice(0, 180)}`);
     }
   }
@@ -614,7 +629,7 @@ async function gateway(req, res, pathName) {
       : undefined;
     const platformModels = await liveGatewayModels();
     const accountModels = accountOverride ? await liveGatewayModels(accountOverride) : [];
-    return send(res, 200, { success: true, models: mergeGatewayModelLists(gatewayModels(), platformModels, accountModels) });
+    return send(res, 200, { success: true, models: mergeGatewayModelLists(gatewayModels(), store.modelCache || [], platformModels, accountModels) });
   }
   if (req.method === 'POST' && pathName === '/v1/image/references') {
     if (!files.length) return fail(400, '没有收到参考图');
