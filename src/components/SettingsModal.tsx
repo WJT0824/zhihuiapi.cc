@@ -39,7 +39,7 @@ export function SettingsModal({
       }
     }
     if (!seen.has(draft.defaultModel)) {
-      const currentIsImage = String(draft.defaultModel).toLowerCase() === "gpt-image-2";
+      const currentIsImage = /(image|img|dall|flux)/i.test(String(draft.defaultModel));
       seen.add(draft.defaultModel);
       all.push({
         id: draft.defaultModel,

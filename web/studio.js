@@ -566,7 +566,19 @@ async function loadModels() {
     let list = [];
     try { const d = await api('/v1/models'); list = d.models || []; } catch {}
     if (!list.length) { const d = await api('/v1/image/models'); list = d.models || []; }
-    if (!list.length) { try { list = JSON.parse(localStorage.getItem('zh_models') || '[]'); } catch {} }
+    let cached = [];
+    try { cached = JSON.parse(localStorage.getItem('zh_models') || '[]'); } catch {}
+    if (Array.isArray(cached) && cached.length) {
+      const merged = new Map(list.map((m) => [String(m.modelId || m.id).toLowerCase(), m]));
+      for (const item of cached) {
+        const key = String(item.modelId || item.id).toLowerCase();
+        const existing = merged.get(key);
+        if (!existing) { merged.set(key, item); continue; }
+        const tags = [...new Set([...(existing.tags || []), ...(item.tags || [])])];
+        merged.set(key, { ...existing, tags });
+      }
+      list = [...merged.values()];
+    }
     state.models = list;
     try { localStorage.setItem('zh_models', JSON.stringify(list)); } catch {}
     const sel = state.nodes.find((n) => n.id === state.selected);

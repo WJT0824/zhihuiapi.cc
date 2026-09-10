@@ -222,6 +222,21 @@ export const mockApi: ZhihuiApi = {
         try { localStorage.setItem("zh_models", JSON.stringify(list)); } catch {}
         return list;
       };
+      const mergeModels = (base: Array<{ id: string; name: string; tags: string[] }>, extra: Array<{ id: string; name: string; tags: string[] }>) => {
+        const merged = new Map(base.map((model) => [model.id.toLowerCase(), model]));
+        for (const model of extra) {
+          const key = model.id.toLowerCase();
+          const existing = merged.get(key);
+          if (!existing) {
+            merged.set(key, model);
+            continue;
+          }
+          const tags = [...new Set([...existing.tags, ...model.tags])];
+          merged.set(key, { ...existing, name: existing.name || model.name, tags });
+        }
+        return [...merged.values()];
+      };
+      const collected: Array<{ id: string; name: string; tags: string[] }> = [];
       try {
         const platformOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
         const platformToken = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
@@ -229,7 +244,7 @@ export const mockApi: ZhihuiApi = {
         if (platformResponse.ok) {
           const platformPayload = await platformResponse.json();
           const platformModels = normalizeList((platformPayload.models || platformPayload.data || []) as Array<{ id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }>);
-          if (platformModels.length) return cacheModels(platformModels);
+          collected.push(...platformModels);
         }
       } catch {}
       const apiKey = String(mockSettings.tokenFluxApiKey ?? "").trim();
@@ -242,13 +257,16 @@ export const mockApi: ZhihuiApi = {
             const payload = await response.json();
             const direct = normalizeList((payload.models || payload.data || []) as Array<{ id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }>);
             if (direct.length) {
-              const hasImage = direct.some((model) => model.tags.includes("text-to-image") || model.tags.includes("image-editing"));
-              if (hasImage || !direct.some((model) => model.tags.includes("reasoning"))) return cacheModels(direct);
-              return cacheModels([{ id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] }, ...direct]);
+              const merged = mergeModels(collected, direct);
+              if (!merged.some((model) => model.tags.includes("text-to-image") || model.tags.includes("image-editing"))) {
+                merged.unshift({ id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] });
+              }
+              return cacheModels(mergeModels(merged, collected));
             }
           }
         } catch {}
       }
+      if (collected.length) return cacheModels(collected);
       const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
       const token = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
       const readModels = async (path: string) => {
