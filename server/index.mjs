@@ -379,10 +379,11 @@ function outputSize(ratio, resolution) {
   const f = factors[String(ratio || '1:1')] || 1;
   return `${base}x${Math.round(base * f)}`;
 }
-async function runGatewayGeneration(job, user, referenceIds, aiOverride) {
+async function runGatewayGeneration(job, user, referenceIds, aiOverride, maskId) {
   const ai = aiOverride || activeAiConfig();
   if (!ai.baseUrl || !ai.apiKey) throw new Error('服务器尚未配置上游图像服务，请在运营后台设置 AI 服务。');
   const refs = store.references.filter((r) => referenceIds.includes(r.id) && r.userId === user.id);
+  const maskRef = maskId ? store.references.find((r) => r.id === maskId && r.userId === user.id) : undefined;
   const prompt = String(job.prompt || '');
   const size = outputSize(job.aspectRatio, job.resolution);
   const payload = { model: job.model || ai.model, prompt, size, quality: job.quality || 'auto', n: job.quantity || 1, response_format: 'b64_json' };
@@ -398,6 +399,10 @@ async function runGatewayGeneration(job, user, referenceIds, aiOverride) {
         const ref = refs[i];
         const file = await readFile(ref.path);
         form.append('image', new Blob([file], { type: ref.mimeType || 'image/png' }), ref.fileName || `ref-${i}.png`);
+      }
+      if (maskRef) {
+        const maskFile = await readFile(maskRef.path);
+        form.append('mask', new Blob([maskFile], { type: maskRef.mimeType || 'image/png' }), maskRef.fileName || 'mask.png');
       }
       response = await fetch(`${upstreamBase}/v1/images/edits`, { method: 'POST', headers, body: form });
     } else {
@@ -579,7 +584,7 @@ async function gateway(req, res, pathName) {
     return send(res, 200, { success: true, user: safeUser(user) });
   }
   if (req.method === 'GET' && pathName === '/v1/models') return send(res, 200, { success: true, models: await liveGatewayModels() });
-  if (req.method === 'GET' && pathName === '/v1/image/models') return send(res, 200, { success: true, models: await imageGatewayModels() });
+  if (req.method === 'GET' && pathName === '/v1/image/models') return send(res, 200, { success: true, models: await liveGatewayModels() });
   if (req.method === 'POST' && pathName === '/v1/image/references') {
     if (!files.length) return fail(400, '没有收到参考图');
     const result = [];
@@ -610,7 +615,8 @@ async function gateway(req, res, pathName) {
     const overrideBaseUrl = String(body.baseUrl || body.ai_base_url || req.headers['x-ai-base-url'] || '').trim();
     const overrideApiKey = String(body.apiKey || body.ai_api_key || req.headers['x-ai-key'] || '').trim();
     const aiOverride = overrideBaseUrl && overrideApiKey ? { baseUrl: overrideBaseUrl, apiKey: overrideApiKey } : undefined;
-    try { await runGatewayGeneration(job, user, Array.isArray(body.reference_ids) ? body.reference_ids : [], aiOverride); await persist(); }
+    const maskId = String(body.mask_id || body.maskId || '').trim();
+    try { await runGatewayGeneration(job, user, Array.isArray(body.reference_ids) ? body.reference_ids : [], aiOverride, maskId); await persist(); }
     catch (err) { if (user.role !== 'admin') user.points += cost; job.status = 'failed'; job.error = String(err.message || err).slice(0, 500); store.ledger.push({ id: uid(), userId: user.id, type: 'image-refund', points: user.role === 'admin' ? 0 : cost, requestId, createdAt: now() }); await persist(); }
     return send(res, job.status === 'succeeded' ? 201 : 200, gatewayJob(job));
   }

@@ -218,6 +218,10 @@ export const mockApi: ZhihuiApi = {
               tags: Array.isArray(item.tags) && item.tags.length ? item.tags.map(String) : [...inferTags(`${id} ${displayName}`)],
             };
           });
+      const cacheModels = (list: Array<{ id: string; name: string; tags: string[] }>) => {
+        try { localStorage.setItem("zh_models", JSON.stringify(list)); } catch {}
+        return list;
+      };
       const apiKey = String(mockSettings.tokenFluxApiKey ?? "").trim();
       const customBase = String(mockSettings.tokenFluxBaseUrl ?? "").trim().replace(/\/+$/, "");
       if (apiKey && customBase) {
@@ -229,8 +233,8 @@ export const mockApi: ZhihuiApi = {
             const direct = normalizeList((payload.models || payload.data || []) as Array<{ id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }>);
             if (direct.length) {
               const hasImage = direct.some((model) => model.tags.includes("text-to-image") || model.tags.includes("image-editing"));
-              if (hasImage || !direct.some((model) => model.tags.includes("reasoning"))) return direct;
-              return [{ id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] }, ...direct];
+              if (hasImage || !direct.some((model) => model.tags.includes("reasoning"))) return cacheModels(direct);
+              return cacheModels([{ id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] }, ...direct]);
             }
           }
         } catch {}
@@ -247,22 +251,26 @@ export const mockApi: ZhihuiApi = {
         const live = await readModels("/v1/models");
         if (live.length) {
           const hasImage = live.some((model) => model.tags.includes("text-to-image") || model.tags.includes("image-editing"));
-          if (hasImage || !live.some((model) => model.tags.includes("reasoning"))) return live;
-          return [
+          if (hasImage || !live.some((model) => model.tags.includes("reasoning"))) return cacheModels(live);
+          return cacheModels([
             { id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] },
             ...live,
-          ];
+          ]);
         }
       } catch {}
       try {
         const imageModels = await readModels("/v1/image/models");
-        if (imageModels.length) return imageModels;
+        if (imageModels.length) return cacheModels(imageModels);
       } catch {}
-      return [
+      try {
+        const cached = JSON.parse(localStorage.getItem("zh_models") || "[]");
+        if (Array.isArray(cached) && cached.length) return cached;
+      } catch {}
+      return cacheModels([
         { id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] },
         { id: "GPT-5.5", name: "GPT-5.5", tags: ["reasoning"] },
         { id: "GPT-5.4", name: "GPT-5.4", tags: ["reasoning"] },
-      ];
+      ]);
     },
     async processText(params) {
       const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
@@ -351,6 +359,72 @@ export const mockApi: ZhihuiApi = {
         const task: GenerateImageResult = { taskId, status: "failed", assetIds: [], error: message };
         tasks.set(task.taskId, task);
         return task;
+      }
+    },
+    async inpaint(params) {
+      const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
+      const token = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
+      const requestId = `paint-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      try {
+        const imageBlob = await (await fetch(params.imagePath)).blob();
+        const maskBlob = await (await fetch(params.maskDataUrl)).blob();
+        const form = new FormData();
+        form.append("files", new File([imageBlob], "source.png", { type: "image/png" }));
+        form.append("files", new File([maskBlob], "mask.png", { type: "image/png" }));
+        const upload = await fetch(`${apiOrigin}/v1/image/references`, {
+          method: "POST",
+          headers: token ? { authorization: `Bearer ${token}` } : {},
+          body: form,
+        });
+        const uploaded = await upload.json().catch(() => ({}));
+        if (!upload.ok || !Array.isArray(uploaded.references) || uploaded.references.length < 2) {
+          throw new Error(uploaded.error || uploaded.detail || "原图或蒙版上传失败");
+        }
+        const requestApiKey = String(mockSettings.tokenFluxApiKey ?? "").trim();
+        const requestBaseUrl = String(mockSettings.tokenFluxBaseUrl ?? "").trim();
+        const response = await fetch(`${apiOrigin}/v1/image/generations`, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({
+            request_id: requestId,
+            model: String(params.model || "gpt-image-2"),
+            prompt: String(params.prompt || ""),
+            aspect_ratio: String(params.ratio || "1:1"),
+            resolution: String(params.resolution || "1K"),
+            quality: "high",
+            quantity: 1,
+            reference_ids: [uploaded.references[0].id],
+            mask_id: uploaded.references[1].id,
+            ...(requestApiKey && requestBaseUrl ? { apiKey: requestApiKey, baseUrl: requestBaseUrl } : {}),
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || payload.detail || `局部重绘失败（${response.status}）`);
+        if (payload.status !== "succeeded" || !payload.assetId) throw new Error(payload.error || "局部重绘没有返回结果");
+        const assetResponse = await fetch(`${apiOrigin}/v1/image/assets/${encodeURIComponent(String(payload.assetId))}`, {
+          headers: token ? { authorization: `Bearer ${token}` } : {},
+        });
+        if (!assetResponse.ok) throw new Error("局部重绘结果下载失败");
+        const blob = await assetResponse.blob();
+        const id = nanoid();
+        const asset: AssetRecord = {
+          id,
+          projectId: params.projectId,
+          type: "image",
+          name: `局部重绘-${new Date().toLocaleTimeString("zh-CN", { hour12: false })}.png`,
+          path: URL.createObjectURL(blob),
+          tags: ["generated", "inpaint"],
+          favorite: false,
+          sourceNodeId: params.sourceNodeId,
+          metadata: { role: "result", requestId },
+          createdAt: now(),
+        };
+        const list = assetStore.get(params.projectId ?? "") ?? [];
+        list.push(asset);
+        assetStore.set(params.projectId ?? "", list);
+        return { taskId: requestId, status: "completed", assetIds: [asset.id] } as GenerateImageResult;
+      } catch (error) {
+        return { taskId: requestId, status: "failed", assetIds: [], error: error instanceof Error ? error.message : String(error) };
       }
     },
     async status(taskId: string) {

@@ -183,6 +183,17 @@ export interface ProcessTextParams {
   referenceAssetIds?: string[];
 }
 
+export interface InpaintParams {
+  projectId?: string;
+  sourceNodeId?: string;
+  imagePath: string;
+  maskDataUrl: string;
+  prompt: string;
+  model?: string;
+  ratio?: string;
+  resolution?: string;
+}
+
 export interface TemplateDefinition {
   id: string;
   category: string;

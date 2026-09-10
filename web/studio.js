@@ -563,8 +563,12 @@ function bindAuth() {
 async function loadModels() {
   if (!state.token) return;
   try {
-    const d = await api('/v1/image/models');
-    state.models = d.models || [];
+    let list = [];
+    try { const d = await api('/v1/models'); list = d.models || []; } catch {}
+    if (!list.length) { const d = await api('/v1/image/models'); list = d.models || []; }
+    if (!list.length) { try { list = JSON.parse(localStorage.getItem('zh_models') || '[]'); } catch {} }
+    state.models = list;
+    try { localStorage.setItem('zh_models', JSON.stringify(list)); } catch {}
     const sel = state.nodes.find((n) => n.id === state.selected);
     const inspector = $('#inspector');
     if (inspector && sel) { inspector.innerHTML = inspectorHtml(sel); bindInspectorEvents(); }

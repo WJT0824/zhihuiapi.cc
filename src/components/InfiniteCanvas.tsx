@@ -25,7 +25,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { nanoid } from "nanoid";
-import type { AssetRecord, CanvasEdge, CanvasNode, TokenFluxModel, ZhihuiProject } from "@/types/domain";
+import type { AssetRecord, CanvasEdge, CanvasNode, GenerateImageResult, TokenFluxModel, ZhihuiProject } from "@/types/domain";
 import { generationCost } from "@/services/billingRules";
 import { toFileUrl } from "@/services/fileUrl";
 
@@ -143,6 +143,7 @@ interface InfiniteCanvasProps {
   onImportImageAt: (position: { x: number; y: number }, connection?: ConnectionDraft) => void;
   onImportImageFiles?: (files: File[], position: { x: number; y: number }) => void | Promise<void>;
   onImportImageIntoNode: (nodeId: string) => void;
+  onInpaint?: (input: { nodeId: string; asset: AssetRecord; prompt: string; maskDataUrl: string; model?: string }) => Promise<GenerateImageResult> | GenerateImageResult;
   onAddAssetToCanvas: (asset: AssetRecord, position?: { x: number; y: number }) => void;
   onDeleteAsset: (asset: AssetRecord) => void;
   onSaveAssetAs: (asset: AssetRecord) => void;
@@ -163,6 +164,7 @@ export function InfiniteCanvas({
   onImportImageAt,
   onImportImageFiles,
   onImportImageIntoNode,
+  onInpaint,
   onAddAssetToCanvas,
   onDeleteAsset,
   onSaveAssetAs,
@@ -179,6 +181,7 @@ export function InfiniteCanvas({
   const [viewerDrag, setViewerDrag] = useState<{ startX: number; startY: number; originX: number; originY: number }>();
   const [multiSelectedIds, setMultiSelectedIds] = useState<string[]>([]);
   const [marqueeRect, setMarqueeRect] = useState<{ x: number; y: number; width: number; height: number }>();
+  const [paintEditor, setPaintEditor] = useState<{ asset: AssetRecord; nodeId: string }>();
   const [drag, setDrag] = useState<
     | { mode: "pan"; startX: number; startY: number; originX: number; originY: number }
     | {
@@ -943,6 +946,7 @@ export function InfiniteCanvas({
                 onRun={() => onRunNode(node)}
                 onUpdate={updateNode}
                 onImportImage={() => onImportImageIntoNode(node.id)}
+                onStartInpaint={onInpaint ? (asset) => setPaintEditor({ asset, nodeId: node.id }) : undefined}
                 onOpenImage={openViewer}
                 onImageLoad={(asset, dimension) => fitNodeToImage(node, asset, dimension)}
                 onImageContextMenu={(asset, event) => {
@@ -1149,6 +1153,22 @@ export function InfiniteCanvas({
           <button onClick={() => clearMultiSelection()}>取消选择</button>
         </div>
       )}
+      {paintEditor && onInpaint && (
+        <InpaintEditor
+          asset={paintEditor.asset}
+          models={models.filter((model) => model.tags.includes("image-editing") || model.tags.includes("text-to-image"))}
+          onClose={() => setPaintEditor(undefined)}
+          onSubmit={(input) =>
+            onInpaint({
+              nodeId: paintEditor.nodeId,
+              asset: paintEditor.asset,
+              prompt: input.prompt,
+              maskDataUrl: input.maskDataUrl,
+              model: input.model,
+            })
+          }
+        />
+      )}
       {viewer && (
         <ImageViewer
           viewer={viewer}
@@ -1181,6 +1201,214 @@ function ContextMenuAction({ item, onClick }: { item: ContextNodeItem; onClick: 
   );
 }
 
+function InpaintEditor({
+  asset,
+  models,
+  onClose,
+  onSubmit,
+}: {
+  asset: AssetRecord;
+  models: TokenFluxModel[];
+  onClose: () => void;
+  onSubmit: (input: { prompt: string; maskDataUrl: string; model: string }) => Promise<GenerateImageResult> | GenerateImageResult;
+}) {
+  const displayRef = useRef<HTMLCanvasElement>(null);
+  const maskRef = useRef<HTMLCanvasElement>(null);
+  const imageRef = useRef<HTMLImageElement>();
+  const drawingRef = useRef(false);
+  const lastPointRef = useRef<{ x: number; y: number }>();
+  const historyRef = useRef<string[]>([]);
+  const [brush, setBrush] = useState(42);
+  const [prompt, setPrompt] = useState("");
+  const [model, setModel] = useState(models[0]?.id || "gpt-image-2");
+  const [ready, setReady] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const image = new window.Image();
+    image.onload = () => {
+      const maxWidth = 760;
+      const maxHeight = 560;
+      const scale = Math.min(1, maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
+      const width = Math.max(64, Math.round(image.naturalWidth * scale));
+      const height = Math.max(64, Math.round(image.naturalHeight * scale));
+      imageRef.current = image;
+      const display = displayRef.current;
+      const mask = maskRef.current;
+      if (display && mask) {
+        display.width = width; display.height = height;
+        mask.width = width; mask.height = height;
+        const maskCtx = mask.getContext("2d");
+        maskCtx?.clearRect(0, 0, width, height);
+        const ctx = display.getContext("2d");
+        ctx?.drawImage(image, 0, 0, width, height);
+      }
+      historyRef.current = [];
+      setReady(true);
+    };
+    image.onerror = () => setError("图片加载失败");
+    image.src = toFileUrl(asset.path);
+  }, [asset.id, asset.path]);
+
+  function redraw() {
+    const display = displayRef.current;
+    const mask = maskRef.current;
+    const image = imageRef.current;
+    if (!display || !mask || !image) return;
+    const ctx = display.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, display.width, display.height);
+    ctx.drawImage(image, 0, 0, display.width, display.height);
+    const tint = document.createElement("canvas");
+    tint.width = display.width; tint.height = display.height;
+    const tintCtx = tint.getContext("2d");
+    if (tintCtx) {
+      tintCtx.fillStyle = "#ef4444";
+      tintCtx.fillRect(0, 0, tint.width, tint.height);
+      tintCtx.globalCompositeOperation = "destination-in";
+      tintCtx.drawImage(mask, 0, 0);
+      ctx.globalAlpha = 0.5;
+      ctx.drawImage(tint, 0, 0);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function pointFromEvent(event: PointerEvent<HTMLCanvasElement>) {
+    const canvas = event.currentTarget;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * canvas.width,
+      y: ((event.clientY - rect.top) / rect.height) * canvas.height,
+    };
+  }
+
+  function paintTo(point: { x: number; y: number }) {
+    const mask = maskRef.current;
+    const ctx = mask?.getContext("2d");
+    if (!mask || !ctx) return;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = brush;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    const last = lastPointRef.current;
+    ctx.beginPath();
+    if (last) { ctx.moveTo(last.x, last.y); ctx.lineTo(point.x, point.y); ctx.stroke(); }
+    else { ctx.arc(point.x, point.y, brush / 2, 0, Math.PI * 2); ctx.fillStyle = "#ffffff"; ctx.fill(); }
+    lastPointRef.current = point;
+    redraw();
+  }
+
+  async function submit() {
+    if (!prompt.trim()) { setError("请输入局部重绘要求"); return; }
+    const mask = maskRef.current;
+    if (!mask) return;
+    const exportCanvas = document.createElement("canvas");
+    exportCanvas.width = mask.width; exportCanvas.height = mask.height;
+    const ctx = exportCanvas.getContext("2d");
+    if (!ctx) return;
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.drawImage(mask, 0, 0);
+    const maskDataUrl = exportCanvas.toDataURL("image/png");
+    setBusy(true); setError("");
+    try {
+      const result = await onSubmit({ prompt: prompt.trim(), maskDataUrl, model });
+      if (result.status === "completed") onClose();
+      else setError(result.error || "局部重绘失败");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="inpaint-backdrop" onPointerDown={(event) => event.stopPropagation()}>
+      <section className="inpaint-panel">
+        <header>
+          <strong>局部重绘</strong>
+          <button onClick={onClose}>关闭</button>
+        </header>
+        <div className="inpaint-canvas-wrap">
+          <canvas
+            ref={displayRef}
+            className="inpaint-canvas"
+            onPointerDown={(event) => {
+              if (!ready) return;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              drawingRef.current = true;
+              lastPointRef.current = undefined;
+              paintTo(pointFromEvent(event));
+            }}
+            onPointerMove={(event) => { if (drawingRef.current) paintTo(pointFromEvent(event)); }}
+            onPointerUp={() => {
+              if (!drawingRef.current) return;
+              drawingRef.current = false; lastPointRef.current = undefined;
+              const mask = maskRef.current;
+              if (mask) historyRef.current.push(mask.toDataURL("image/png"));
+            }}
+          />
+          <canvas ref={maskRef} style={{ display: "none" }} />
+        </div>
+        <div className="inpaint-tools">
+          <label>
+            画笔
+            <input type="range" min={8} max={160} value={brush} onChange={(event) => setBrush(Number(event.target.value))} />
+            <span>{brush}px</span>
+          </label>
+          <button
+            onClick={() => {
+              const mask = maskRef.current;
+              const ctx = mask?.getContext("2d");
+              if (mask && ctx) ctx.clearRect(0, 0, mask.width, mask.height);
+              historyRef.current = [];
+              redraw();
+            }}
+          >
+            清除蒙版
+          </button>
+          <button
+            onClick={() => {
+              const last = historyRef.current.pop();
+              const mask = maskRef.current;
+              if (!mask) return;
+              const ctx = mask.getContext("2d");
+              if (!ctx) return;
+              ctx.clearRect(0, 0, mask.width, mask.height);
+              if (last) {
+                const img = new window.Image();
+                img.onload = () => { ctx.drawImage(img, 0, 0, mask.width, mask.height); redraw(); };
+                img.src = last;
+              } else redraw();
+            }}
+          >
+            撤销
+          </button>
+          <select value={model} onChange={(event) => setModel(event.target.value)}>
+            {(models.length ? models : [{ id: "gpt-image-2", name: "GPT Image 2", tags: [] }]).map((item) => (
+              <option key={item.id} value={item.id}>{item.name || item.id}</option>
+            ))}
+          </select>
+        </div>
+        <textarea
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          placeholder="描述涂抹区域要改成什么，例如：把这里换成木质桌面，保留原光影"
+        />
+        {error && <p className="inpaint-error">{error}</p>}
+        <footer>
+          <span>用画笔涂抹需要重绘的区域</span>
+          <button className="primary" onClick={() => void submit()} disabled={busy || !ready}>
+            {busy ? "正在重绘…" : "开始局部重绘"}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 function NodeCard({
   node,
   models,
@@ -1200,6 +1428,7 @@ function NodeCard({
   onRun,
   onUpdate,
   onImportImage,
+  onStartInpaint,
   onStartConnect,
   onCompleteConnect,
   onPointerDown,
@@ -1227,6 +1456,7 @@ function NodeCard({
   onRun: () => void;
   onUpdate: (node: CanvasNode) => void;
   onImportImage: () => void;
+  onStartInpaint?: (asset: AssetRecord) => void;
   onStartConnect: (sourcePort: string, event: PointerEvent<HTMLButtonElement>) => void;
   onCompleteConnect: (targetPort: string, event: PointerEvent<HTMLButtonElement>) => void;
   onPointerDown: React.PointerEventHandler<HTMLDivElement>;
@@ -1339,6 +1569,20 @@ function NodeCard({
           >
             <ImagePlus size={13} />
             {resultAsset ? "替换图片" : "上传图片"}
+          </button>
+        )}
+        {resultAsset?.type === "image" && onStartInpaint && (
+          <button
+            className="node-header-action node-control"
+            onPointerDown={stopControlPointer}
+            onClick={(event) => {
+              event.stopPropagation();
+              onStartInpaint(resultAsset);
+            }}
+            title="局部重绘"
+          >
+            <Wand2 size={13} />
+            局部重绘
           </button>
         )}
         <span>{imageDimension ? `${imageDimension.width} x ${imageDimension.height}` : ""}</span>

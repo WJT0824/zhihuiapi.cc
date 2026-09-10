@@ -570,6 +570,31 @@ export function App() {
     setStatus(`已导入 ${imageAssets.length} 张图片`);
   }
 
+  async function runInpaint(input: { nodeId: string; asset: AssetRecord; prompt: string; maskDataUrl: string; model?: string }) {
+    const current = projectRef.current;
+    const node = current?.graph.nodes.find((item) => item.id === input.nodeId);
+    if (!current || !node) return { taskId: "", status: "failed" as const, assetIds: [], error: "找不到节点" };
+    if (!window.zhihui.ai.inpaint) return { taskId: "", status: "failed" as const, assetIds: [], error: "当前客户端不支持局部重绘" };
+    const running: CanvasNode = { ...node, status: "running", params: { ...node.params, progress: 2, progressStartedAt: Date.now(), error: undefined } };
+    updateNode(running);
+    setStatus("正在进行局部重绘...");
+    const result = await window.zhihui.ai.inpaint({
+      projectId: current.id,
+      sourceNodeId: node.id,
+      imagePath: input.asset.path,
+      maskDataUrl: input.maskDataUrl,
+      prompt: input.prompt,
+      model: input.model,
+      ratio: String(node.params.ratio || "1:1"),
+      resolution: String(node.params.resolution || "1K"),
+    });
+    await refreshWallet();
+    await refreshAssets(current.id);
+    mergeCompletedRun({ nodeId: node.id, running, result });
+    setStatus(result.status === "completed" ? "局部重绘完成" : result.error || "局部重绘失败");
+    return result;
+  }
+
   function addWorkflow(workflowId: string) {
     if (!project) return;
     const workflow = workflowDefinitions.find((item) => item.id === workflowId);
@@ -1321,6 +1346,7 @@ export function App() {
           onImportImageAt={(position, connection) => void importImageAt(position, connection)}
           onImportImageFiles={(files, position) => importImageFiles(files, position)}
           onImportImageIntoNode={(nodeId) => void importImageIntoNode(nodeId)}
+          onInpaint={runInpaint}
           onAddAssetToCanvas={(asset, position) => void addAssetToCanvas(asset, position)}
           onDeleteAsset={(asset) => void deleteAsset(asset)}
           onSaveAssetAs={(asset) => void saveAssetAs(asset)}
@@ -1355,6 +1381,7 @@ export function App() {
                 }
               }
               if (!seen.has("gpt-image-2")) merged.unshift({ id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] });
+              try { localStorage.setItem("zh_models", JSON.stringify(merged)); } catch {}
               return merged;
             });
           }}

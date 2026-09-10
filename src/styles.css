@@ -1068,6 +1068,38 @@ button:disabled {
 .prompt-tool-controls .run-button {
   min-width: 108px;
 }
+.inpaint-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, .52);
+  backdrop-filter: blur(3px);
+}
+.inpaint-panel {
+  display: grid;
+  width: min(840px, 96vw);
+  max-height: 94vh;
+  gap: 12px;
+  overflow: auto;
+  border: 1px solid #d9e1f1;
+  border-radius: 16px;
+  padding: 16px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, .28);
+}
+.inpaint-panel header { display: flex; align-items: center; justify-content: space-between; }
+.inpaint-canvas-wrap { display: grid; place-items: center; overflow: auto; border: 1px solid #dfe6f2; border-radius: 12px; padding: 8px; background: #f4f7fc; }
+.inpaint-canvas { max-width: 100%; max-height: 58vh; border-radius: 8px; cursor: crosshair; touch-action: none; }
+.inpaint-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.inpaint-tools label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #4a5670; }
+.inpaint-tools input[type="range"] { width: 150px; }
+.inpaint-tools select { min-height: 32px; border: 1px solid #dfe6f2; border-radius: 8px; padding: 0 8px; background: #fff; }
+.inpaint-panel textarea { min-height: 84px; border: 1px solid #dfe6f2; border-radius: 10px; padding: 10px; font: inherit; resize: vertical; }
+.inpaint-panel footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #68748e; font-size: 12px; }
+.inpaint-error { margin: 0; color: #d9434a; font-size: 13px; }
 
 .node-mini-controls,
 .workbench-controls {

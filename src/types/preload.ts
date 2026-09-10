@@ -3,6 +3,7 @@ import type {
   AssetRecord,
   GenerateImageParams,
   GenerateImageResult,
+  InpaintParams,
   ProcessTextParams,
   BillingLedgerEntry,
   LocalUser,
@@ -41,6 +42,7 @@ export interface ZhihuiApi {
     listModels(): Promise<TokenFluxModel[]>;
     processText(params: ProcessTextParams): Promise<{ text: string }>;
     createTask(params: GenerateImageParams & { projectId?: string; sourceNodeId?: string }): Promise<GenerateImageResult>;
+    inpaint?(params: InpaintParams): Promise<GenerateImageResult>;
     status(taskId: string): Promise<GenerateImageResult>;
     cancel(taskId: string): Promise<GenerateImageResult>;
   };
