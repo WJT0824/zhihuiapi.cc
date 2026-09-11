@@ -55,7 +55,15 @@ const send = (res, status, body, headers = {}) => { res.writeHead(status, { 'con
 const sendRaw = (res, status, data, headers = {}) => { res.writeHead(status, headers); res.end(data); };
 const parseBody = async (req) => { let data = ''; for await (const chunk of req) data += chunk; try { return data ? JSON.parse(data) : {}; } catch { return {}; } };
 const tokenUser = (req, kind = 'access') => { const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, ''); if (!token) return null; const session = store.sessions[hash(token)]; const id = session && typeof session === 'object' ? (session.kind === kind ? session.userId : null) : session; return store.users.find((u) => u.id === id); };
-const safeUser = (u) => u && ({ id: u.id, nickname: u.nickname, username: u.nickname || u.username || '', displayName: u.displayName || u.nickname || '', email: u.email || '', role: u.role || 'user', isAdmin: u.role === 'admin', points: u.points, credits: u.points, profile: u.profile || {}, membershipType: u.membershipType || 'registered', membershipExpiresAt: u.membershipExpiresAt || '', isMembershipValid: true, beansBalance: u.beansBalance || 0, beansExpiresAt: u.beansExpiresAt || '', deviceId: u.deviceId || '', createdAt: u.createdAt });
+const publicProfile = (profile = {}) => {
+  const settings = { ...(profile.settings || {}) };
+  if (settings.tokenFluxApiKey || settings.apiKey || settings.upstreamApiKey) {
+    settings.tokenFluxApiKeyConfigured = true;
+    delete settings.tokenFluxApiKey; delete settings.apiKey; delete settings.upstreamApiKey;
+  }
+  return { ...profile, settings };
+};
+const safeUser = (u) => u && ({ id: u.id, nickname: u.nickname, username: u.nickname || u.username || '', displayName: u.displayName || u.nickname || '', email: u.email || '', role: u.role || 'user', isAdmin: u.role === 'admin', points: u.points, credits: u.points, profile: publicProfile(u.profile), membershipType: u.membershipType || 'registered', membershipExpiresAt: u.membershipExpiresAt || '', isMembershipValid: true, beansBalance: u.beansBalance || 0, beansExpiresAt: u.beansExpiresAt || '', deviceId: u.deviceId || '', createdAt: u.createdAt });
 const route = (req) => { const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`); return { path: url.pathname, query: url.searchParams }; };
 
 const studioModels = () => {
