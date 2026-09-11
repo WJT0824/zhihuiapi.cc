@@ -6,5 +6,43 @@
   "generationModel": "gpt-image-2",
   "editModel": "gpt-image-2",
   "pointsPerGeneration": 3,
+  "workflowsUrl": "https://zhihuiapicc-production.up.railway.app/v1/studio/workflows/public",
+  "comfyEnabled": false,
+  "workflows": [
+    {
+      "code": "hd-restore-4k",
+      "name": "高清修复 4K",
+      "kind": "upscale",
+      "description": "AI 超分后重采样到长边 4096，适合印刷与电商主图。",
+      "points": 3,
+      "source": "builtin",
+      "builtIn": true,
+      "targetLongEdge": 4096,
+      "scale": 2
+    },
+    {
+      "code": "hd-upscale-8k",
+      "name": "超清放大 8K",
+      "kind": "upscale",
+      "description": "AI 超分后输出长边 8192 的超大图，用于大幅面输出。",
+      "points": 4,
+      "source": "builtin",
+      "builtIn": true,
+      "targetLongEdge": 8192,
+      "scale": 4
+    },
+    {
+      "code": "vectorize",
+      "name": "图转矢量",
+      "kind": "vectorize",
+      "description": "调用 ComfyUI 矢量描摹节点输出 SVG。上传自己的图转矢量工作流会自动替换此预设。",
+      "points": 3,
+      "source": "builtin",
+      "builtIn": true,
+      "requiresCustomWorkflow": true,
+      "targetLongEdge": 0,
+      "scale": 0
+    }
+  ],
   "updatedAt": "2026-09-11T00:00:00Z"
 }

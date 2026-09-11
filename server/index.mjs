@@ -4,6 +4,12 @@ import { existsSync, createReadStream, createWriteStream, readFileSync, statSync
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { normalizeUpstreamBase, normalizeApiKey, upstreamUrls, upstreamAuthHeaders, fetchUpstream } from './upstream.mjs';
+import {
+  normalizeComfyBaseUrl, comfySystemStats, comfyObjectInfo, uploadComfyImage, queueComfyPrompt,
+  fetchComfyHistory, collectComfyOutputs, downloadComfyOutput, readImageSize, parseComfyWorkflow,
+  applyComfyBindings, targetDimensions, BUILT_IN_PRESETS, pickUpscaleModel, buildVectorWorkflow,
+  summarizeParsed, detectPresetKind, builtInPreset, findVectorNodeClass,
+} from './comfy.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -35,7 +41,7 @@ const uid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const passwordHash = (value, salt) => crypto.scryptSync(value, salt, 64).toString('hex');
-const defaultStore = () => ({ users: [], tasks: [], redemptionCodes: [], redemptions: [], rechargeNonces: [], ledger: [], sessions: {}, references: [], jobs: [], assets: [], workflows: [], modelCache: [], aiConfig: { baseUrl: '', apiKey: '', model: '' } });
+const defaultStore = () => ({ users: [], tasks: [], redemptionCodes: [], redemptions: [], rechargeNonces: [], ledger: [], sessions: {}, references: [], jobs: [], assets: [], workflows: [], comfyPresets: [], modelCache: [], aiConfig: { baseUrl: '', apiKey: '', model: '' }, comfy: { baseUrl: '', apiKey: '', enabled: true } });
 let store = defaultStore();
 async function load() {
   await mkdir(DATA_DIR, { recursive: true });
@@ -43,7 +49,7 @@ async function load() {
   await mkdir(REF_DIR, { recursive: true });
   await mkdir(DOWNLOAD_DIR, { recursive: true });
   if (existsSync(DATA_FILE)) { try { store = JSON.parse(await readFile(DATA_FILE, 'utf8')); } catch { store = defaultStore(); } }
-  store.tasks ||= []; store.redemptionCodes ||= []; store.redemptions ||= []; store.rechargeNonces ||= []; store.ledger ||= []; store.sessions ||= {}; store.references ||= []; store.jobs ||= []; store.assets ||= []; store.workflows ||= []; store.modelCache ||= []; store.aiConfig ||= { baseUrl: '', apiKey: '', model: '' };
+  store.tasks ||= []; store.redemptionCodes ||= []; store.redemptions ||= []; store.rechargeNonces ||= []; store.ledger ||= []; store.sessions ||= {}; store.references ||= []; store.jobs ||= []; store.assets ||= []; store.workflows ||= []; store.comfyPresets ||= []; store.modelCache ||= []; store.aiConfig ||= { baseUrl: '', apiKey: '', model: '' }; store.comfy ||= { baseUrl: '', apiKey: '', enabled: true };
   if (!store.users.length) {
     const passwordSalt = crypto.randomBytes(16).toString('hex');
     store.users.push({ id: uid(), nickname: 'admin', email: '', passwordSalt, passwordHash: passwordHash(ADMIN_KEY, passwordSalt), points: 1000, role: 'admin', createdAt: now() });
@@ -179,8 +185,179 @@ const resolveAiConfig = (user, body = {}) => {
   }
   return accountAiOverride(user) || activeAiConfig();
 };
+const activeComfyConfig = () => {
+  const stored = store.comfy || {};
+  const raw = String(stored.baseUrl || process.env.COMFY_BASE_URL || '').trim();
+  let baseUrl = '';
+  if (raw) { try { baseUrl = normalizeComfyBaseUrl(raw); } catch { baseUrl = ''; } }
+  return {
+    baseUrl,
+    apiKey: String(stored.apiKey || process.env.COMFY_API_KEY || '').trim(),
+    enabled: stored.enabled !== false,
+  };
+};
+
+const listWorkflowPresets = () => {
+  const merged = new Map(BUILT_IN_PRESETS.map((preset) => [preset.code, { ...preset, source: 'builtin' }]));
+  for (const preset of store.comfyPresets || []) merged.set(preset.code, { ...preset, source: 'uploaded' });
+  return [...merged.values()];
+};
+
+const findWorkflowPreset = (code) => listWorkflowPresets().find((preset) => preset.code === String(code || ''));
+
+const publicWorkflowPreset = (preset) => ({
+  code: preset.code,
+  name: preset.name,
+  kind: preset.kind,
+  description: preset.description || '',
+  points: Number(preset.points ?? 3),
+  source: preset.source || (preset.builtIn ? 'builtin' : 'uploaded'),
+  builtIn: Boolean(preset.builtIn),
+  requiresCustomWorkflow: Boolean(preset.requiresCustomWorkflow),
+  targetLongEdge: Number(preset.targetLongEdge || 0),
+  scale: Number(preset.scale || 0),
+  params: preset.params || {},
+  summary: preset.summary || null,
+  createdAt: preset.createdAt,
+  updatedAt: preset.updatedAt,
+});
+
+const comfyJobError = (status) => {
+  const messages = Array.isArray(status?.messages) ? status.messages : [];
+  const executionError = messages.find((item) => Array.isArray(item) && item[0] === 'execution_error');
+  if (executionError) {
+    const detail = executionError[1] || {};
+    const node = detail.node_type || detail.node_id || '节点';
+    return `${node} 执行失败：${String(detail.exception_message || detail.exception_type || '未知错误').slice(0, 300)}`;
+  }
+  return 'ComfyUI 任务执行失败。';
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function registerWorkflowPreset(body = {}) {
+  const raw = body.workflow ?? body.graph ?? body.json ?? body.definition;
+  if (!raw) throw new Error('请上传或粘贴 ComfyUI 工作流 JSON。');
+  const parsed = parseComfyWorkflow(raw);
+  const requested = String(body.code || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  const code = requested || `wf-${crypto.randomBytes(4).toString('hex')}`;
+  const kind = detectPresetKind(parsed, body.kind);
+  const builtIn = builtInPreset(code);
+  const preset = {
+    id: uid(),
+    code,
+    name: String(body.name || '').trim() || builtIn?.name || code,
+    description: String(body.description || '').trim() || builtIn?.description || '',
+    kind,
+    points: Math.max(0, Math.min(1000, Number(body.points ?? builtIn?.points ?? 3) || 0)),
+    targetLongEdge: Math.max(0, Number(body.targetLongEdge ?? builtIn?.targetLongEdge ?? (kind === 'upscale' ? 4096 : 0)) || 0),
+    scale: Math.max(0, Number(body.scale ?? builtIn?.scale ?? (kind === 'upscale' ? 2 : 0)) || 0),
+    workflow: parsed.workflow,
+    bindings: parsed.bindings,
+    summary: summarizeParsed(parsed),
+    params: body.params && typeof body.params === 'object' ? body.params : {},
+    builtIn: false,
+    createdAt: now(),
+    updatedAt: now(),
+  };
+  const index = (store.comfyPresets || []).findIndex((item) => item.code === code);
+  if (index >= 0) {
+    preset.id = store.comfyPresets[index].id;
+    preset.createdAt = store.comfyPresets[index].createdAt || preset.createdAt;
+    store.comfyPresets[index] = preset;
+  } else {
+    store.comfyPresets.push(preset);
+  }
+  await persist();
+  return preset;
+}
+
+async function executeComfyWorkflow(job, preset, user, referenceIds, options = {}) {
+  const comfy = activeComfyConfig();
+  if (!comfy.enabled || !comfy.baseUrl) throw new Error('尚未配置 ComfyUI 服务地址，请在运营后台填写并测试连接。');
+  const ref = store.references.find((item) => referenceIds.includes(item.id) && item.userId === user.id);
+  if (!ref) throw new Error('请先把图片节点连接到该工作流节点。');
+
+  job.progress = 8;
+  const buffer = await readFile(ref.path);
+  const source = readImageSize(buffer) || { width: 1024, height: 1024 };
+  const uploaded = await uploadComfyImage(comfy.baseUrl, buffer, ref.fileName || `${job.id}.png`, comfy.apiKey);
+  job.progress = 18;
+  await persist();
+
+  let graph = preset.workflow || null;
+  let bindings = preset.bindings || null;
+  if (!graph) {
+    if (preset.kind !== 'vectorize') throw new Error('该预设还没有配置 ComfyUI 工作流，请在运营后台上传。');
+    const objectInfo = await comfyObjectInfo(comfy.baseUrl, comfy.apiKey);
+    const built = buildVectorWorkflow(objectInfo, uploaded.name);
+    graph = built.graph;
+    bindings = { image: { nodeId: '1', input: 'image' }, prompt: null, scale: null, size: null, seed: null, upscaleModel: null, output: null };
+    job.autoConfigured = built.classType;
+  }
+  if (!bindings) bindings = parseComfyWorkflow(graph).bindings;
+
+  let upscaleModel = '';
+  if (bindings.upscaleModel) {
+    const objectInfo = await comfyObjectInfo(comfy.baseUrl, comfy.apiKey);
+    upscaleModel = pickUpscaleModel(objectInfo, options.upscaleModel);
+    if (!upscaleModel) throw new Error('ComfyUI 没有可用的放大模型，请把放大模型放进 models/upscale_models，或上传自定义工作流。');
+  }
+
+  const dims = preset.targetLongEdge ? targetDimensions(source, preset.targetLongEdge) : { width: source.width, height: source.height };
+  const patched = applyComfyBindings(graph, bindings, {
+    imageName: uploaded.name,
+    imageSubfolder: uploaded.subfolder,
+    prompt: String(options.prompt || ''),
+    scale: Number(options.scale || preset.scale || 1) || 1,
+    width: Number(options.width || dims.width),
+    height: Number(options.height || dims.height),
+    seed: options.seed === undefined ? Math.floor(Math.random() * 1e14) : options.seed,
+    upscaleModel,
+  });
+
+  const { promptId } = await queueComfyPrompt(comfy.baseUrl, patched, comfy.apiKey);
+  job.remoteTaskId = promptId;
+  job.progress = 30;
+  await persist();
+
+  const startedAt = Date.now();
+  const timeoutMs = Math.max(60000, Number(process.env.COMFY_TIMEOUT_MS) || 900000);
+  let outputs = [];
+  for (;;) {
+    if (Date.now() - startedAt > timeoutMs) throw new Error('ComfyUI 任务超时，请检查队列和显存占用。');
+    await sleep(2500);
+    const history = await fetchComfyHistory(comfy.baseUrl, promptId, comfy.apiKey);
+    const entry = history[promptId];
+    if (!entry) {
+      job.progress = Math.min(85, 30 + Math.floor((Date.now() - startedAt) / 15000) * 5);
+      continue;
+    }
+    const status = entry.status || {};
+    if (status.status_str === 'error') throw new Error(comfyJobError(status));
+    outputs = collectComfyOutputs(entry);
+    if (outputs.length) break;
+    if (status.completed === true || status.status_str === 'success') throw new Error('ComfyUI 任务完成但没有返回可用输出，请确认工作流包含保存图片或导出矢量节点。');
+    job.progress = Math.min(88, 30 + Math.floor((Date.now() - startedAt) / 15000) * 5);
+  }
+
+  const preferred = preset.kind === 'vectorize'
+    ? outputs.find((item) => item.kind === 'svg') || outputs[0]
+    : outputs.find((item) => item.kind === 'image') || outputs[0];
+  const file = await downloadComfyOutput(comfy.baseUrl, preferred, comfy.apiKey);
+  const assetFile = path.join(ASSET_DIR, `${job.id}${file.ext}`);
+  await writeFile(assetFile, file.buffer);
+  job.assetFile = assetFile;
+  job.mimeType = file.mime;
+  job.outputKind = preferred.kind === 'svg' ? 'svg' : 'image';
+  job.status = 'succeeded';
+  job.progress = 100;
+  job.completedAt = now();
+}
+
 const publicPluginConfig = () => {
   const ai = activeAiConfig();
+  const comfy = activeComfyConfig();
   return {
     serviceUrl: 'https://zhihuiapi.cc/',
     apiOrigin: PUBLIC_API_ORIGIN || 'https://zhihuiapicc-production.up.railway.app/',
@@ -189,6 +366,9 @@ const publicPluginConfig = () => {
     generationModel: ai.model || 'gpt-image-2',
     editModel: ai.model || 'gpt-image-2',
     pointsPerGeneration: 3,
+    workflowsUrl: `${(PUBLIC_API_ORIGIN || 'https://zhihuiapicc-production.up.railway.app').replace(/\/+$/, '')}/v1/studio/workflows/public`,
+    comfyEnabled: Boolean(comfy.enabled && comfy.baseUrl),
+    workflows: listWorkflowPresets().map(publicWorkflowPreset),
     updatedAt: now(),
   };
 };
@@ -355,7 +535,7 @@ function createSignedRechargeCodes(points, count) {
   }
   return codes;
 }
-const gatewayJob = (job) => ({ success: job.status === 'succeeded', jobId: job.id, assetId: job.status === 'succeeded' ? job.id : null, status: job.status, error: job.error || undefined, prompt: job.prompt || '', modelId: job.model || AI_IMAGE_MODEL, createdAt: job.createdAt || '' });
+const gatewayJob = (job) => ({ success: job.status === 'succeeded', jobId: job.id, assetId: job.status === 'succeeded' ? job.id : null, status: job.status, error: job.error || undefined, prompt: job.prompt || '', modelId: job.model || AI_IMAGE_MODEL, progress: Number(job.progress || (job.status === 'succeeded' ? 100 : 0)), workflowCode: job.workflowCode || undefined, outputKind: job.outputKind || undefined, mimeType: job.mimeType || undefined, createdAt: job.createdAt || '' });
 const issueTokens = (user) => { const accessToken = uid(); const refreshToken = uid(); store.sessions[hash(accessToken)] = { userId: user.id, kind: 'access', createdAt: now() }; store.sessions[hash(refreshToken)] = { userId: user.id, kind: 'refresh', createdAt: now() }; return { access_token: accessToken, refresh_token: refreshToken }; };
 const readRawBody = async (req) => { const chunks = []; let total = 0; for await (const chunk of req) { total += chunk.length; if (total > 60 * 1024 * 1024) throw Object.assign(new Error('请求体过大'), { status: 413 }); chunks.push(Buffer.from(chunk)); } return Buffer.concat(chunks); };
 function parseMultipart(raw, contentType) {
@@ -578,6 +758,15 @@ async function gateway(req, res, pathName) {
       return fail(400, `连接失败：${String(error.message || error).slice(0, 180)}`);
     }
   }
+  if (req.method === 'GET' && pathName === '/v1/studio/workflows/public') {
+    const comfy = activeComfyConfig();
+    return send(res, 200, {
+      success: true,
+      comfy: { configured: Boolean(comfy.baseUrl), enabled: comfy.enabled },
+      workflows: listWorkflowPresets().map(publicWorkflowPreset),
+      updatedAt: now(),
+    });
+  }
   const user = tokenUser(req);
   if (!user) return fail(401, '请先登录平台账号');
   if (req.method === 'POST' && pathName === '/v1/ai/text') {
@@ -690,7 +879,62 @@ async function gateway(req, res, pathName) {
       return fail(error.status || 400, error.message || String(error));
     }
   }
-  if (req.method === 'GET' && pathName === '/v1/studio/workflows') return send(res, 200, { success: true, workflows: store.workflows || [] });
+  if (req.method === 'GET' && pathName === '/v1/studio/workflows') {
+    const comfy = activeComfyConfig();
+    return send(res, 200, {
+      success: true,
+      comfy: { configured: Boolean(comfy.baseUrl), enabled: comfy.enabled },
+      workflows: listWorkflowPresets().map(publicWorkflowPreset),
+    });
+  }
+  const workflowRunMatch = pathName.match(/^\/v1\/studio\/workflows\/([^/]+)\/run$/);
+  if (req.method === 'POST' && workflowRunMatch) {
+    const preset = findWorkflowPreset(decodeURIComponent(workflowRunMatch[1]));
+    if (!preset) return fail(404, '工作流预设不存在。');
+    const comfy = activeComfyConfig();
+    if (!comfy.enabled || !comfy.baseUrl) {
+      return send(res, 409, {
+        success: false,
+        code: 'comfy_not_configured',
+        fallback: preset.kind === 'upscale',
+        error: '尚未配置 ComfyUI 服务地址，可在运营后台填写并测试连接。',
+      });
+    }
+    const referenceIds = [
+      ...(Array.isArray(body.reference_ids) ? body.reference_ids : []),
+      ...(body.reference_id ? [body.reference_id] : []),
+    ].map(String).filter(Boolean);
+    if (!referenceIds.length) return fail(400, '请先把图片节点连接到该工作流节点。');
+    const requestId = String(body.request_id || '').trim() || `wf-${uid()}`;
+    const existingJob = store.jobs.find((job) => job.requestId === requestId && job.userId === user.id);
+    if (existingJob) return send(res, 200, { ...gatewayJob(existingJob), workflow: publicWorkflowPreset(preset) });
+    const cost = Math.max(0, Number(preset.points ?? 3));
+    if (user.role !== 'admin' && user.points < cost) return fail(402, '积分不足');
+    const job = {
+      id: uid(), requestId, userId: user.id,
+      prompt: String(body.prompt || ''), model: preset.name, workflowCode: preset.code, engine: 'comfy',
+      quality: 'high', quantity: 1, status: 'processing', progress: 0, cost, createdAt: now(),
+    };
+    if (user.role !== 'admin') user.points -= cost;
+    store.jobs.push(job);
+    store.ledger.push({ id: uid(), userId: user.id, type: 'workflow', points: user.role === 'admin' ? 0 : -cost, requestId, workflowCode: preset.code, createdAt: now() });
+    await persist();
+    executeComfyWorkflow(job, preset, user, referenceIds, {
+      prompt: body.prompt,
+      scale: body.scale,
+      width: body.width,
+      height: body.height,
+      seed: body.seed,
+      upscaleModel: body.upscale_model || body.upscaleModel,
+    }).catch(async (error) => {
+      if (user.role !== 'admin') user.points += cost;
+      job.status = 'failed';
+      job.error = String(error.message || error).slice(0, 500);
+      store.ledger.push({ id: uid(), userId: user.id, type: 'workflow-refund', points: user.role === 'admin' ? 0 : cost, requestId, workflowCode: preset.code, createdAt: now() });
+      await persist();
+    });
+    return send(res, 202, { success: true, jobId: job.id, assetId: null, status: 'processing', workflow: publicWorkflowPreset(preset) });
+  }
   if (user.role !== 'admin') return fail(403, '需要管理员权限');
   if (req.method === 'GET' && pathName === '/v1/admin/ai-config') {
     const cfg = activeAiConfig();
@@ -737,7 +981,66 @@ async function gateway(req, res, pathName) {
     const users = store.users.slice(-200); const jobs = store.jobs.slice(-100).reverse(); const workflows = store.workflows || [];
     return send(res, 200, { success: true, stats: { users: users.length, jobs: jobs.length, credits: users.reduce((n, u) => n + u.points, 0), succeeded: jobs.filter((j) => j.status === 'succeeded').length, failed: jobs.filter((j) => j.status === 'failed').length }, users: users.map((u) => ({ ...safeUser(u), blocked: false })), jobs: jobs.map((j) => ({ id: j.id, requestId: j.requestId, userId: j.userId, status: j.status, model: j.model, cost: j.cost, error: j.error, createdAt: j.createdAt })), workflows });
   }
-  if (req.method === 'POST' && pathName === '/v1/studio/workflows') { const workflow = typeof body.workflow === 'string' ? JSON.parse(body.workflow) : body.workflow; if (!workflow || !workflow.code) return fail(400, '工作流缺少 code'); const item = { id: uid(), code: String(workflow.code), name: String(workflow.name || workflow.code), description: String(workflow.description || ''), definition: workflow, version: Number(workflow.version) || 1, published: workflow.published !== false, createdAt: now(), updatedAt: now() }; store.workflows.push(item); await persist(); return send(res, 201, { success: true, workflow: item }); }
+  if (req.method === 'GET' && pathName === '/v1/admin/comfy-config') {
+    const cfg = activeComfyConfig();
+    return send(res, 200, { success: true, config: { baseUrl: cfg.baseUrl, enabled: cfg.enabled, apiKeyConfigured: Boolean(cfg.apiKey), apiKeyPreview: cfg.apiKey ? `${cfg.apiKey.slice(0, 3)}…${cfg.apiKey.slice(-3)}` : '' } });
+  }
+  if ((req.method === 'POST' || req.method === 'PUT') && pathName === '/v1/admin/comfy-config') {
+    const current = activeComfyConfig();
+    const rawBase = body.baseUrl !== undefined ? String(body.baseUrl) : current.baseUrl;
+    let baseUrl = '';
+    if (rawBase.trim()) { try { baseUrl = normalizeComfyBaseUrl(rawBase); } catch (error) { return fail(400, error.message); } }
+    const apiKey = body.apiKey !== undefined ? String(body.apiKey).trim() : current.apiKey;
+    const enabled = body.enabled === undefined ? current.enabled : Boolean(body.enabled);
+    store.comfy = { baseUrl, apiKey, enabled };
+    await persist();
+    return send(res, 200, { success: true, config: { baseUrl, enabled, apiKeyConfigured: Boolean(apiKey), apiKeyPreview: apiKey ? `${apiKey.slice(0, 3)}…${apiKey.slice(-3)}` : '' } });
+  }
+  if (req.method === 'POST' && pathName === '/v1/admin/comfy/test') {
+    const current = activeComfyConfig();
+    let target = current.baseUrl;
+    if (body.baseUrl !== undefined && String(body.baseUrl).trim()) {
+      try { target = normalizeComfyBaseUrl(body.baseUrl); } catch (error) { return fail(400, error.message); }
+    }
+    if (!target) return fail(400, '请先填写 ComfyUI 服务地址。');
+    const key = body.apiKey !== undefined ? String(body.apiKey).trim() : current.apiKey;
+    try {
+      const stats = await comfySystemStats(target, key);
+      const objectInfo = await comfyObjectInfo(target, key, { force: true });
+      const upscaleModels = objectInfo?.UpscaleModelLoader?.input?.required?.model_name?.[0];
+      const vectorNode = findVectorNodeClass(objectInfo);
+      return send(res, 200, {
+        success: true,
+        message: `连接成功：${Object.keys(objectInfo).length} 个节点可用`,
+        system: { comfyui: stats?.system?.comfyui_version || '', device: stats?.devices?.[0]?.name || '' },
+        nodeCount: Object.keys(objectInfo).length,
+        upscaleModels: Array.isArray(upscaleModels) ? upscaleModels.slice(0, 20) : [],
+        vectorNode: vectorNode || null,
+      });
+    } catch (error) {
+      return fail(400, `连接失败：${String(error.message || error).slice(0, 240)}`);
+    }
+  }
+  if (req.method === 'GET' && pathName === '/v1/admin/comfy/workflows') {
+    return send(res, 200, { success: true, workflows: listWorkflowPresets().map((preset) => ({ ...publicWorkflowPreset(preset), summary: preset.summary || null })) });
+  }
+  if (req.method === 'POST' && (pathName === '/v1/admin/comfy/workflows' || pathName === '/v1/studio/workflows')) {
+    try {
+      const preset = await registerWorkflowPreset(body);
+      return send(res, 201, { success: true, workflow: publicWorkflowPreset(preset), detected: preset.summary });
+    } catch (error) {
+      return fail(400, String(error.message || error));
+    }
+  }
+  const comfyWorkflowDelete = pathName.match(/^\/v1\/admin\/comfy\/workflows\/([^/]+)$/);
+  if (req.method === 'DELETE' && comfyWorkflowDelete) {
+    const code = decodeURIComponent(comfyWorkflowDelete[1]);
+    const before = (store.comfyPresets || []).length;
+    store.comfyPresets = (store.comfyPresets || []).filter((preset) => preset.code !== code);
+    await persist();
+    if (before === store.comfyPresets.length) return fail(404, '该预设不是上传的工作流，无法删除。');
+    return send(res, 200, { success: true, deleted: code });
+  }
   return fail(404, '接口不存在');
 }
 

@@ -8,8 +8,10 @@ import type {
   BillingLedgerEntry,
   LocalUser,
   RechargeRedeemResult,
+  RunWorkflowParams,
   TokenFluxModel,
   WalletState,
+  WorkflowLibrary,
   ZhihuiProject,
 } from "./domain";
 
@@ -43,6 +45,8 @@ export interface ZhihuiApi {
     processText(params: ProcessTextParams): Promise<{ text: string }>;
     createTask(params: GenerateImageParams & { projectId?: string; sourceNodeId?: string }): Promise<GenerateImageResult>;
     inpaint?(params: InpaintParams): Promise<GenerateImageResult>;
+    listWorkflows?(): Promise<WorkflowLibrary>;
+    runWorkflow?(params: RunWorkflowParams): Promise<GenerateImageResult>;
     status(taskId: string): Promise<GenerateImageResult>;
     cancel(taskId: string): Promise<GenerateImageResult>;
   };

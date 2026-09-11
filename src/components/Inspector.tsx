@@ -1,4 +1,4 @@
-import type { CanvasNode, TokenFluxModel } from "@/types/domain";
+import type { CanvasNode, TokenFluxModel, WorkflowPreset } from "@/types/domain";
 
 const ratioToDefaultSize: Record<string, string> = {
   "16:9": "1280x720",
@@ -19,10 +19,12 @@ const ratioToDefaultSize: Record<string, string> = {
 export function Inspector({
   node,
   models,
+  workflows,
   onChange,
 }: {
   node?: CanvasNode;
   models: TokenFluxModel[];
+  workflows?: WorkflowPreset[];
   onChange: (node: CanvasNode) => void;
 }) {
   if (!node) {
@@ -72,6 +74,7 @@ export function Inspector({
       </label>
       {(node.type === "prompt" ||
         node.type === "ai-generate" ||
+        node.type === "workflow" ||
         node.type === "background" ||
         node.type === "ecommerce-template" ||
         node.type === "print-template") && (
@@ -133,6 +136,75 @@ export function Inspector({
             <input type="number" value={Number(node.params.height ?? 1600)} onChange={(event) => setParam("height", Number(event.target.value))} />
           </label>
         </div>
+      )}
+      {node.type === "workflow" && (
+        <>
+          <label>
+            ComfyUI 预设
+            <select
+              value={String(node.params.presetCode ?? "")}
+              onChange={(event) => {
+                const preset = (workflows ?? []).find((item) => item.code === event.target.value);
+                onChange({
+                  ...node,
+                  title: preset?.name ?? node.title,
+                  params: {
+                    ...node.params,
+                    presetCode: event.target.value,
+                    workflowKind: preset?.kind,
+                    scale: preset?.scale,
+                  },
+                });
+              }}
+            >
+              {(workflows ?? []).length ? null : <option value="">暂无可用工作流</option>}
+              {(workflows ?? []).map((preset) => (
+                <option key={preset.code} value={preset.code}>
+                  {preset.name}（{preset.points} 积分）
+                </option>
+              ))}
+            </select>
+          </label>
+          {(() => {
+            const preset = (workflows ?? []).find((item) => item.code === String(node.params.presetCode ?? ""));
+            if (!preset) return <p className="settings-hint">在运营后台上传 ComfyUI 工作流后会自动出现在这里。</p>;
+            return (
+              <>
+                <p className="settings-hint">{preset.description}</p>
+                <p className="settings-hint">
+                  {preset.source === "uploaded" ? "自定义上传" : "内置预设"}
+                  {preset.targetLongEdge ? ` · 长边 ${preset.targetLongEdge}` : ""}
+                  {` · ${preset.points} 积分`}
+                </p>
+              </>
+            );
+          })()}
+          {node.params.workflowKind === "upscale" && (
+            <div className="two-cols">
+              <label>
+                放大倍率
+                <input
+                  type="number"
+                  min={1}
+                  max={8}
+                  step={1}
+                  value={Number(node.params.factor ?? node.params.scale ?? 2)}
+                  onChange={(event) => setParam("factor", Number(event.target.value))}
+                />
+              </label>
+              <label>
+                输出长边
+                <input
+                  type="number"
+                  min={0}
+                  step={512}
+                  value={Number(node.params.targetLongEdge ?? 0)}
+                  onChange={(event) => setParam("targetLongEdge", Number(event.target.value))}
+                />
+              </label>
+            </div>
+          )}
+        </>
       )}
       <label className="check-row">
         <input type="checkbox" checked={Boolean(node.locked)} onChange={(event) => onChange({ ...node, locked: event.target.checked })} />

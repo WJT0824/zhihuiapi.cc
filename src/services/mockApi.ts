@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import type { ZhihuiApi } from "@/types/preload";
-import type { AppSettings, AssetRecord, BillingLedgerEntry, GenerateImageResult, LocalUser, WalletState, ZhihuiProject } from "@/types/domain";
+import type { AppSettings, AssetRecord, BillingLedgerEntry, GenerateImageResult, LocalUser, WalletState, WorkflowLibrary, WorkflowPreset, ZhihuiProject } from "@/types/domain";
 
 const now = () => new Date().toISOString();
 const webIdentity = (() => {
@@ -56,6 +56,58 @@ const persistSettings = (settings: AppSettings) => {
     if (typeof localStorage !== "undefined") localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
   } catch {}
 };
+const serviceOrigin = () =>
+  typeof location !== "undefined" && ["localhost", "127.0.0.1"].includes(location.hostname)
+    ? location.origin
+    : "https://zhihuiapicc-production.up.railway.app";
+const authToken = () => (typeof localStorage === "undefined" ? "" : localStorage.getItem("zh_token") || "");
+async function uploadCanvasReferences(assetIds: string[] | undefined): Promise<string[]> {
+  if (!assetIds?.length) return [];
+  const token = authToken();
+  if (!token) throw new Error("请先登录网站账号。");
+  const form = new FormData();
+  let attached = 0;
+  for (const assetId of assetIds) {
+    const asset = [...assetStore.values()].flat().find((item) => item.id === assetId);
+    if (!asset?.path) continue;
+    const blob = await (await fetch(asset.path)).blob();
+    form.append("files", new File([blob], asset.name || `reference-${attached}.png`, { type: blob.type || "image/png" }));
+    attached += 1;
+  }
+  if (!attached) return [];
+  const response = await fetch(`${serviceOrigin()}/v1/image/references`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: form,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || payload.detail || `参考图上传失败（${response.status}）`);
+  return (payload.references || []).map((item: { id: string }) => item.id);
+}
+async function storeResultImage(assetId: string, params: { projectId?: string; sourceNodeId?: string; name: string; requestId: string; metadata?: Record<string, unknown> }): Promise<AssetRecord> {
+  const token = authToken();
+  const response = await fetch(`${serviceOrigin()}/v1/image/assets/${encodeURIComponent(assetId)}`, {
+    headers: token ? { authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) throw new Error("结果文件下载失败");
+  const blob = await response.blob();
+  const asset: AssetRecord = {
+    id: nanoid(),
+    projectId: params.projectId,
+    type: blob.type === "image/svg+xml" ? "document" : "image",
+    name: params.name,
+    path: URL.createObjectURL(blob),
+    tags: ["generated"],
+    favorite: false,
+    sourceNodeId: params.sourceNodeId,
+    metadata: { requestId: params.requestId, mimeType: blob.type, ...(params.metadata || {}) },
+    createdAt: now(),
+  };
+  const list = assetStore.get(params.projectId ?? "") ?? [];
+  list.push(asset);
+  assetStore.set(params.projectId ?? "", list);
+  return asset;
+}
 function createBrowserImageAsset(file: File, projectId?: string): AssetRecord | undefined {
   if (!file.type.startsWith("image/")) return undefined;
   const id = nanoid();
@@ -260,6 +312,7 @@ export const mockApi: ZhihuiApi = {
       const requestId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const taskId = requestId;
       try {
+        const referenceIds = await uploadCanvasReferences(params.referenceAssetIds);
         const response = await fetch(`${apiOrigin}/v1/image/generations`, {
           method: "POST",
           headers,
@@ -271,6 +324,7 @@ export const mockApi: ZhihuiApi = {
             resolution: String(params.extra?.resolution || (longEdge >= 2800 ? "4K" : longEdge >= 1500 ? "2K" : "1K")),
             quality: String(params.extra?.quality || "auto"),
             quantity: Math.max(1, Math.min(4, Number(params.n) || 1)),
+            ...(referenceIds.length ? { reference_ids: referenceIds } : {}),
             ...(requestApiKey && requestBaseUrl ? { apiKey: requestApiKey, baseUrl: requestBaseUrl } : {}),
           }),
         });
@@ -388,6 +442,73 @@ export const mockApi: ZhihuiApi = {
       const task: GenerateImageResult = { taskId, status: "canceled", assetIds: [] };
       tasks.set(task.taskId, task);
       return task;
+    },
+    async listWorkflows(): Promise<WorkflowLibrary> {
+      const response = await accountRequest("/v1/studio/workflows");
+      return {
+        comfy: response.comfy || { configured: false, enabled: false },
+        workflows: (response.workflows || []) as WorkflowPreset[],
+      };
+    },
+    async runWorkflow(params): Promise<GenerateImageResult> {
+      const token = authToken();
+      const requestId = `wf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      try {
+        const referenceIds = await uploadCanvasReferences(params.referenceAssetIds);
+        const response = await fetch(`${serviceOrigin()}/v1/studio/workflows/${encodeURIComponent(params.code)}/run`, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({
+            request_id: requestId,
+            prompt: params.prompt || "",
+            scale: params.scale,
+            width: params.width,
+            height: params.height,
+            reference_ids: referenceIds,
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          return {
+            taskId: requestId,
+            status: "failed",
+            assetIds: [],
+            error: payload.error || payload.detail || `工作流启动失败（${response.status}）`,
+            code: payload.code,
+            fallback: Boolean(payload.fallback),
+          };
+        }
+        const jobId = String(payload.jobId || "");
+        for (let attempt = 0; attempt < 600; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+          const jobResponse = await fetch(`${serviceOrigin()}/v1/image/jobs/${encodeURIComponent(jobId)}`, {
+            headers: token ? { authorization: `Bearer ${token}` } : {},
+          });
+          const job = await jobResponse.json().catch(() => ({}));
+          if (!jobResponse.ok) {
+            return { taskId: jobId, status: "failed", assetIds: [], error: job.error || "工作流状态读取失败" };
+          }
+          params.onProgress?.(Number(job.progress || 0));
+          if (job.status === "succeeded") {
+            const asset = await storeResultImage(String(job.assetId), {
+              projectId: params.projectId,
+              sourceNodeId: params.sourceNodeId,
+              name: `${payload.workflow?.name || params.code}-${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`,
+              requestId,
+              metadata: { workflowCode: params.code, outputKind: job.outputKind },
+            });
+            const result: GenerateImageResult = { taskId: jobId, status: "completed", assetIds: [asset.id], progress: 100 };
+            tasks.set(jobId, result);
+            return result;
+          }
+          if (job.status === "failed") {
+            return { taskId: jobId, status: "failed", assetIds: [], error: job.error || "工作流执行失败" };
+          }
+        }
+        return { taskId: jobId, status: "failed", assetIds: [], error: "工作流超时，请稍后在任务历史查看结果。" };
+      } catch (error) {
+        return { taskId: requestId, status: "failed", assetIds: [], error: error instanceof Error ? error.message : String(error) };
+      }
     },
   },
   billing: {

@@ -490,6 +490,10 @@ async function adminPage() {
   if (!d) return workspaceShell(`<div class="empty">需要管理员权限</div>`, 'admin');
   let aiConfig = {};
   try { const cfg = await api('/v1/admin/ai-config'); aiConfig = cfg.config || {}; } catch {}
+  let comfyConfig = {};
+  try { const cfg = await api('/v1/admin/comfy-config'); comfyConfig = cfg.config || {}; } catch {}
+  let comfyPresets = [];
+  try { const list = await api('/v1/admin/comfy/workflows'); comfyPresets = list.workflows || []; } catch {}
   let rechargeKeyConfigured = false;
   try { const keyInfo = await api('/v1/admin/recharge-key'); rechargeKeyConfigured = Boolean(keyInfo.configured); } catch {}
   const stats = d.stats || {};
@@ -502,6 +506,20 @@ async function adminPage() {
     <div class="panel-card"><h3 style="margin-bottom:14px">积分码签名私钥（与插件互通）</h3><form id="recharge-key-form"><label class="field"><span>Ed25519 私钥（PEM）</span><textarea class="input" name="privateKey" style="min-height:110px" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></label><button class="btn primary" type="submit">导入并启用插件格式积分码</button><p id="recharge-key-result" style="font-size:12px;color:#09835e">${rechargeKeyConfigured ? '当前已配置签名私钥，生成的积分码为插件通用格式。' : '当前未配置签名私钥；生成的是网站专用 ZH- 兑换码。导入私钥后，网站生成的兑换码即可在插件中使用。'}</p></form></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">AI 图像服务（运行时可切换上游）</h3><form id="ai-config-form"><div class="form-grid"><label class="field"><span>上游中转地址</span><input class="input" name="baseUrl" value="${esc(aiConfig.baseUrl || 'https://tokenflux.cloud/')}" placeholder="支持 https://host、https://host/v1 或完整接口地址"></label><label class="field"><span>生成模型</span><input class="input" name="model" value="${esc(aiConfig.model || 'gpt-image-2')}" placeholder="gpt-image-2"></label></div><label class="field"><span>上游 API Key</span><input class="input" name="apiKey" type="password" placeholder="留空表示不修改当前密钥"></label><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button class="btn primary" type="submit">保存并立即生效</button><button class="btn" type="button" id="ai-config-test">测试并读取模型</button></div><p id="ai-config-result" style="font-size:12px;color:#09835e"></p><p style="font-size:12px;color:#8a94a8;margin-top:8px">切换上游只需填这里并保存，无需重新部署；系统会自动兼容根地址、/v1 和完整接口地址。</p></form></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">工作流上传 / 功能同步</h3><form id="workflow-form"><label class="field"><span>工作流 JSON（可粘贴或上传）</span><textarea class="input" name="workflow" style="min-height:150px" placeholder='{"code":"product-hero","name":"产品主视觉","version":1,...}'></textarea></label><input class="input" type="file" id="workflow-file" accept=".json,application/json" style="margin-top:10px"><button class="btn primary" style="margin-top:14px">上传并发布工作流</button><p id="workflow-result" style="font-size:12px;color:#09835e;white-space:pre-wrap"></p></form></div>
+    <div class="panel-card"><h3 style="margin-bottom:14px">ComfyUI 服务（超清放大 / 图转矢量）</h3>
+      <form id="comfy-config-form"><div class="form-grid"><label class="field"><span>ComfyUI 地址</span><input class="input" name="baseUrl" value="${esc(comfyConfig.baseUrl || '')}" placeholder="http://127.0.0.1:8188 或反向代理地址"></label><label class="field"><span>访问密钥（可选）</span><input class="input" name="apiKey" type="password" placeholder="留空表示不修改当前密钥"></label></div>
+      <label class="field" style="margin-top:10px"><span><input type="checkbox" name="enabled" ${comfyConfig.enabled === false ? '' : 'checked'}> 启用 ComfyUI 工作流执行</span></label>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button class="btn primary" type="submit">保存 ComfyUI 配置</button><button class="btn" type="button" id="comfy-test">测试连接</button></div>
+      <p id="comfy-config-result" style="font-size:12px;color:#09835e"></p></div>
+      <form id="comfy-workflow-form" style="margin-top:18px;border-top:1px solid rgba(120,140,180,.18);padding-top:16px"><div class="form-grid"><label class="field"><span>预设名称</span><input class="input" name="name" placeholder="例如 高清修复 4K"></label><label class="field"><span>预设代码</span><input class="input" name="code" placeholder="hd-restore-4k / vectorize / 自定义"></label></div>
+      <div class="form-grid" style="margin-top:10px"><label class="field"><span>类型</span><select class="input" name="kind"><option value="upscale">超清放大</option><option value="vectorize">图转矢量</option><option value="custom">其他工作流</option></select></label><label class="field"><span>消耗积分</span><input class="input" name="points" type="number" min="0" value="3"></label></div>
+      <label class="field" style="margin-top:10px"><span>ComfyUI 工作流 JSON（API 格式，可粘贴或上传）</span><textarea class="input" name="workflow" style="min-height:160px" placeholder='从 ComfyUI 使用「保存（API 格式）」导出后粘贴到这里；支持 {{image}} / {{scale}} / {{width}} / {{height}} / {{prompt}} / {{upscale_model}} 占位符'></textarea></label>
+      <input class="input" type="file" id="comfy-workflow-file" accept=".json,application/json" style="margin-top:10px">
+      <button class="btn primary" style="margin-top:14px">上传并自动生成预设</button>
+      <p id="comfy-workflow-result" style="font-size:12px;color:#09835e;white-space:pre-wrap"></p></form>
+      <p style="font-size:12px;color:#8a94a8;margin-top:10px">同名代码会覆盖内置预设：上传 hd-restore-4k、hd-upscale-8k 或 vectorize 即可替换内置的高清放大与图转矢量流程。上传后画布右键即会出现对应节点。</p>
+    </div>
+    <div class="panel-card"><h3 style="margin-bottom:14px">ComfyUI 预设</h3><table class="table"><thead><tr><th>名称</th><th>代码</th><th>类型</th><th>来源</th><th>积分</th><th>操作</th></tr></thead><tbody>${(comfyPresets || []).map((w) => `<tr><td><b>${esc(w.name)}</b></td><td>${esc(w.code)}</td><td>${w.kind === 'upscale' ? '超清放大' : w.kind === 'vectorize' ? '图转矢量' : '其他'}</td><td>${w.source === 'uploaded' ? '<span class="badge done">自定义</span>' : '内置'}</td><td>${w.points}</td><td>${w.source === 'uploaded' ? `<button class="btn" data-action="delete-comfy-preset" data-code="${esc(w.code)}">删除</button>` : '—'}</td></tr>`).join('') || '<tr><td colspan="6">暂无预设</td></tr>'}</tbody></table></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">已发布工作流</h3><table class="table"><thead><tr><th>名称</th><th>代码</th><th>版本</th><th>状态</th><th>更新时间</th></tr></thead><tbody>${wfRows || '<tr><td colspan="5">暂无工作流</td></tr>'}</tbody></table></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">用户</h3><table class="table"><thead><tr><th>昵称</th><th>邮箱</th><th>角色</th><th>积分</th><th>注册时间</th></tr></thead><tbody>${userRows}</tbody></table></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">最近任务</h3><table class="table"><thead><tr><th>任务</th><th>状态</th><th>模型</th><th>消耗</th><th>时间</th></tr></thead><tbody>${jobRows}</tbody></table></div>
@@ -1048,6 +1066,51 @@ function bindAdmin() {
       toast('上游连接正常', 'ok');
     } catch (err) { if (box) box.textContent = '测试失败：' + err.message; toast(err.message, 'error'); }
   };
+  const comfyForm = $('#comfy-config-form'); if (comfyForm) comfyForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(comfyForm));
+    const box = $('#comfy-config-result');
+    try {
+      const d = await api('/v1/admin/comfy-config', { method: 'PUT', body: JSON.stringify({ baseUrl: f.baseUrl, apiKey: f.apiKey, enabled: f.enabled === 'on' }) });
+      if (box) box.textContent = '已保存：' + (d.config.baseUrl || '未配置地址') + (d.config.enabled ? '' : '（已停用 ComfyUI 执行）');
+      toast('ComfyUI 配置已保存', 'ok');
+    } catch (err) { if (box) box.textContent = '保存失败：' + err.message; toast(err.message, 'error'); }
+  };
+  const comfyTest = $('#comfy-test'); if (comfyTest) comfyTest.onclick = async () => {
+    const box = $('#comfy-config-result');
+    if (box) box.textContent = '正在连接 ComfyUI…';
+    try {
+      const d = await api('/v1/admin/comfy/test', { method: 'POST', body: JSON.stringify({}) });
+      const models = (d.upscaleModels || []).slice(0, 6).join('、');
+      if (box) box.textContent = `${d.message}；放大模型：${models || '未检测到'}；矢量节点：${d.vectorNode || '未检测到'}`;
+      toast('ComfyUI 连接正常', 'ok');
+    } catch (err) { if (box) box.textContent = '连接失败：' + err.message; toast(err.message, 'error'); }
+  };
+  const comfyWorkflowForm = $('#comfy-workflow-form');
+  const comfyWorkflowFile = $('#comfy-workflow-file');
+  if (comfyWorkflowFile) comfyWorkflowFile.addEventListener('change', async () => {
+    const file = comfyWorkflowFile.files && comfyWorkflowFile.files[0]; if (!file) return;
+    const text = await file.text();
+    const area = comfyWorkflowForm && comfyWorkflowForm.querySelector('[name=workflow]'); if (area) area.value = text;
+    const nameField = comfyWorkflowForm && comfyWorkflowForm.querySelector('[name=name]');
+    if (nameField && !nameField.value) nameField.value = file.name.replace(/\.json$/i, '');
+  });
+  if (comfyWorkflowForm) comfyWorkflowForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(comfyWorkflowForm));
+    const box = $('#comfy-workflow-result');
+    if (box) box.textContent = '正在解析工作流…';
+    try {
+      let workflow;
+      try { workflow = JSON.parse(f.workflow); } catch { throw new Error('工作流不是有效的 JSON'); }
+      const d = await api('/v1/admin/comfy/workflows', { method: 'POST', body: JSON.stringify({ name: f.name, code: f.code, kind: f.kind, points: Number(f.points), workflow }) });
+      const det = d.detected || {};
+      const warns = (det.warnings || []).join('；');
+      if (box) box.textContent = `已创建预设：${d.workflow.name}（${d.workflow.code}）· 类型 ${det.kind || d.workflow.kind} · 节点 ${det.nodeCount || 0} 个 · 图片输入 ${det.hasImageInput ? '已识别' : '未识别'}${warns ? '；提示：' + warns : ''}`;
+      toast('工作流已上传，画布已增加对应节点', 'ok');
+      setTimeout(() => render(), 900);
+    } catch (err) { if (box) box.textContent = '上传失败：' + err.message; toast(err.message, 'error'); }
+  };
   const keyForm = $('#recharge-key-form'); if (keyForm) keyForm.onsubmit = async (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(keyForm));
@@ -1097,6 +1160,14 @@ function bindDelegated() {
       if (action === 'switch-auth') { state.mode = state.mode === 'login' ? 'register' : 'login'; render(); }
       if (action === 'logout') logout();
       if (action === 'open-settings') { state.page = 'settings'; location.hash = 'settings'; render(); }
+      if (action === 'delete-comfy-preset') {
+        const code = actionEl.dataset.code;
+        if (code && confirm('删除自定义工作流预设 ' + code + '？')) {
+          try { await api('/v1/admin/comfy/workflows/' + encodeURIComponent(code), { method: 'DELETE' }); toast('已删除预设 ' + code, 'ok'); setTimeout(() => render(), 600); }
+          catch (err) { toast(err.message, 'error'); }
+        }
+        return;
+      }
       if (action === 'add-node') addNode(actionEl.dataset.type);
       if (action === 'upscale-workflow') createUpscaleWorkflow(actionEl.dataset.preset || actionEl.dataset.menuId || '4k');
       if (action === 'layout-flow') layoutFlow(actionEl.dataset.mode || 'auto');

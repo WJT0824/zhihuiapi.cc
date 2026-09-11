@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import {
   X,
   ArrowLeftRight,
@@ -21,11 +21,13 @@ import {
   Wand2,
   WandSparkles,
   Layers3,
+  PenTool,
+  Workflow,
   ChevronRight,
   type LucideIcon,
 } from "lucide-react";
 import { nanoid } from "nanoid";
-import type { AssetRecord, CanvasEdge, CanvasNode, GenerateImageResult, TokenFluxModel, ZhihuiProject } from "@/types/domain";
+import type { AssetRecord, CanvasEdge, CanvasNode, GenerateImageResult, TokenFluxModel, WorkflowPreset, ZhihuiProject } from "@/types/domain";
 import { generationCost } from "@/services/billingRules";
 import { toFileUrl } from "@/services/fileUrl";
 
@@ -133,6 +135,7 @@ interface InfiniteCanvasProps {
   project: ZhihuiProject;
   assets: AssetRecord[];
   models: TokenFluxModel[];
+  workflows?: WorkflowPreset[];
   billingEnabled: boolean;
   walletBalance: number;
   selectedNodeId?: string;
@@ -154,6 +157,7 @@ export function InfiniteCanvas({
   project,
   assets,
   models,
+  workflows,
   billingEnabled,
   walletBalance,
   selectedNodeId,
@@ -174,6 +178,30 @@ export function InfiniteCanvas({
   const marqueeRectRef = useRef<{ x: number; y: number; width: number; height: number }>();
   const [contextMenu, setContextMenu] = useState<{ screenX: number; screenY: number; worldX: number; worldY: number; connection?: ConnectionDraft }>();
   const [contextSubmenu, setContextSubmenu] = useState<string>();
+  const workflowMenuItems = useMemo<ContextNodeItem[]>(
+    () =>
+      (workflows ?? []).map((preset) => ({
+        key: `workflow-${preset.code}`,
+        type: "workflow" as CanvasNode["type"],
+        label: preset.name,
+        Icon: preset.kind === "vectorize" ? PenTool : Workflow,
+        preset: {
+          title: preset.name,
+          params: {
+            presetCode: preset.code,
+            workflowKind: preset.kind,
+            points: preset.points,
+            scale: preset.scale,
+            prompt: "",
+          },
+        },
+      })),
+    [workflows],
+  );
+  const contextGroups = useMemo<ContextNodeGroup[]>(
+    () => (workflowMenuItems.length ? [...contextNodeGroups, { key: "workflow", label: "工作流 / ComfyUI", items: workflowMenuItems }] : contextNodeGroups),
+    [workflowMenuItems],
+  );
   const [imageMenu, setImageMenu] = useState<{ screenX: number; screenY: number; worldX: number; worldY: number; asset: AssetRecord }>();
   const [connecting, setConnecting] = useState<{ sourceNode: string; sourcePort: string; x: number; y: number }>();
   const [viewer, setViewer] = useState<ImageViewerState>();
@@ -1038,7 +1066,7 @@ export function InfiniteCanvas({
               />
             ))}
             <div className="context-menu-divider" />
-            {contextNodeGroups.map((group) => (
+            {contextGroups.map((group) => (
               <button
                 key={group.key}
                 className={`context-menu-group ${contextSubmenu === group.key ? "active" : ""}`}
@@ -1055,8 +1083,8 @@ export function InfiniteCanvas({
             ))}
           </div>
           {contextSubmenu && (() => {
-            const groupIndex = contextNodeGroups.findIndex((group) => group.key === contextSubmenu);
-            const group = contextNodeGroups[groupIndex];
+            const groupIndex = contextGroups.findIndex((group) => group.key === contextSubmenu);
+            const group = contextGroups[groupIndex];
             if (!group) return null;
             return (
               <div
@@ -1554,7 +1582,7 @@ function NodeCard({
 
       <header className="node-dragbar">
         <strong>
-          {isPromptNode ? <FileText size={15} /> : <Image size={15} />}
+          {isPromptNode ? <FileText size={15} /> : node.type === "workflow" ? <Workflow size={15} /> : <Image size={15} />}
           {displayNodeTitle(node.title)}
         </strong>
         {isUploadNode && (
@@ -2227,6 +2255,7 @@ function getMinimumNodeSize(node: CanvasNode) {
   if (node.type === "ai-generate") return { width: 660, height: 360 };
   if (node.type === "background") return { width: 660, height: 340 };
   if (node.type === "upscale" || node.type === "resize") return { width: 660, height: 320 };
+  if (node.type === "workflow") return { width: 660, height: 330 };
   if (node.type === "prompt") {
     const tool = String(node.params.tool ?? "");
     return { width: 660, height: ["chat", "polish-prompt", "reverse-prompt"].includes(tool) ? 276 : 210 };

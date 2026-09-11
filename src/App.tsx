@@ -16,8 +16,10 @@ import {
   PanelLeftOpen,
   PanelRight,
   PanelRightClose,
+  PenTool,
   Play,
   Plus,
+  Workflow,
   Save,
   Settings,
   Sparkles,
@@ -27,7 +29,7 @@ import {
 } from "lucide-react";
 import { nanoid } from "nanoid";
 import { allTemplates, ecommerceTemplates, printTemplates } from "@/data/templates";
-import type { AppSettings, AssetRecord, BillingLedgerEntry, CanvasEdge, CanvasNode, LocalUser, TokenFluxModel, WalletState, ZhihuiProject } from "@/types/domain";
+import type { AppSettings, AssetRecord, BillingLedgerEntry, CanvasEdge, CanvasNode, LocalUser, TokenFluxModel, WalletState, WorkflowPreset, ZhihuiProject } from "@/types/domain";
 import { AssetsPanel } from "@/components/AssetsPanel";
 import { InfiniteCanvas } from "@/components/InfiniteCanvas";
 import { Inspector } from "@/components/Inspector";
@@ -245,6 +247,7 @@ export function App() {
   const [projects, setProjects] = useState<ZhihuiProject[]>([]);
   const [assets, setAssets] = useState<AssetRecord[]>([]);
   const [models, setModels] = useState<TokenFluxModel[]>([]);
+  const [workflowPresets, setWorkflowPresets] = useState<WorkflowPreset[]>([]);
   const [settings, setSettings] = useState<AppSettings>();
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
   const [tab, setTab] = useState<Tab>("templates");
@@ -259,6 +262,7 @@ export function App() {
   const projectRef = useRef<ZhihuiProject>();
   const assetsRef = useRef<AssetRecord[]>([]);
   const settingsRef = useRef<AppSettings>();
+  const workflowPresetsRef = useRef<WorkflowPreset[]>([]);
 
   const selectedNode = useMemo(
     () => project?.graph.nodes.find((node) => node.id === selectedNodeId),
@@ -325,8 +329,16 @@ export function App() {
         .listModels()
         .then((list) => setModels(normalizeModelTags(list)))
         .catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
+      window.zhihui.ai
+        .listWorkflows?.()
+        .then((library) => setWorkflowPresets(library?.workflows || []))
+        .catch(() => setWorkflowPresets([]));
     })();
   }, []);
+
+  useEffect(() => {
+    workflowPresetsRef.current = workflowPresets;
+  }, [workflowPresets]);
 
   async function submitAuth() {
     setAuthError("");
@@ -948,6 +960,55 @@ export function App() {
     return next;
   }
 
+  function workflowPresetForNode(node: CanvasNode): string {
+    if (node.type === "workflow") return String(node.params.presetCode || node.params.workflowCode || "");
+    if (node.type !== "upscale") return "";
+    const tool = String(node.params.tool || "");
+    if (tool === "restore-4k" || tool === "hd-upscale") return "hd-restore-4k";
+    if (tool === "upscale-8k") return "hd-upscale-8k";
+    return "";
+  }
+
+  async function runWorkflowNode(node: CanvasNode, currentProject: ZhihuiProject, preset: WorkflowPreset): Promise<boolean> {
+    if (!window.zhihui.ai.runWorkflow) return false;
+    const upstream = getUpstreamContextFromGraph(currentProject.graph, node.id);
+    if (!upstream.assetIds.length) {
+      updateNode({ ...node, status: "failed", params: { ...node.params, error: "请先把图片节点连接到该工作流节点。" } });
+      setStatus("工作流需要一张输入图片");
+      return true;
+    }
+    const promptText = [...upstream.prompts, getPromptFromNode(node)].filter(Boolean).join("\n");
+    const { error: _ignoredError, ...paramsWithoutError } = node.params;
+    const running: CanvasNode = { ...node, params: { ...paramsWithoutError, progress: 2, progressStartedAt: Date.now() }, status: "running", resultAssetIds: [] };
+    updateNode(running);
+    setStatus(`${preset.name} 正在通过 ComfyUI 处理...`);
+    const result = await window.zhihui.ai.runWorkflow({
+      code: preset.code,
+      projectId: currentProject.id,
+      sourceNodeId: node.id,
+      prompt: promptText,
+      scale: Number(node.params.factor || node.params.scale || preset.scale || 0) || undefined,
+      width: Number(node.params.width) || undefined,
+      height: Number(node.params.height) || undefined,
+      referenceAssetIds: upstream.assetIds,
+      onProgress: (progress) => {
+        const latest = projectRef.current?.graph.nodes.find((item) => item.id === node.id);
+        if (!latest) return;
+        updateNode({ ...latest, params: { ...latest.params, progress } });
+      },
+    });
+    if (result.fallback) {
+      updateNode({ ...running, status: "idle", params: { ...paramsWithoutError, progress: undefined, progressStartedAt: undefined } });
+      return false;
+    }
+    await refreshWallet();
+    const next = mergeCompletedRun({ nodeId: node.id, running, result });
+    await refreshAssets(currentProject.id);
+    setStatus(result.status === "completed" ? `任务完成：${node.title} 已更新` : result.error || "工作流执行失败");
+    if (next && selectedNodeId === node.id) setSelectedNodeId(node.id);
+    return true;
+  }
+
   async function runAiNode(node = selectedNode) {
     const currentProject = projectRef.current;
     if (!currentProject || !node) return;
@@ -990,6 +1051,11 @@ export function App() {
       updateNode({ ...node, status: "completed", params: { ...node.params, error: undefined } });
       setStatus("文本备注已保存，可连接到图片生成节点作为说明");
       return;
+    }
+    const comfyPresetCode = workflowPresetForNode(node);
+    if (comfyPresetCode) {
+      const preset = workflowPresetsRef.current.find((item) => item.code === comfyPresetCode);
+      if (preset && await runWorkflowNode(node, currentProject, preset)) return;
     }
     const latestSettings = settingsRef.current;
     const { error: _oldError, ...paramsWithoutError } = node.params;
@@ -1264,6 +1330,35 @@ export function App() {
                     })}
                   </div>
                 </section>
+                {workflowPresets.length > 0 && (
+                  <section className="tool-section">
+                    <h2>工作流（ComfyUI）</h2>
+                    <div className="resource-list">
+                      {workflowPresets.map((preset) => (
+                        <button
+                          key={preset.code}
+                          onClick={() =>
+                            addNodeAt("workflow", {
+                              x: (240 - (project?.graph.viewport.x ?? 0)) / (project?.graph.viewport.zoom ?? 1),
+                              y: (220 - (project?.graph.viewport.y ?? 0)) / (project?.graph.viewport.zoom ?? 1),
+                            }, undefined, {
+                              title: preset.name,
+                              params: {
+                                presetCode: preset.code,
+                                workflowKind: preset.kind,
+                                points: preset.points,
+                                scale: preset.scale,
+                              },
+                            })
+                          }
+                        >
+                          {preset.kind === "vectorize" ? <PenTool size={17} /> : <Workflow size={17} />}
+                          {preset.name}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                )}
                 <section className="tool-section">
                   <h2>添加资源</h2>
                   <div className="resource-list">
@@ -1335,6 +1430,7 @@ export function App() {
           project={project}
           assets={assets}
           models={canvasModels}
+          workflows={workflowPresets}
           billingEnabled={billingEnabled}
           walletBalance={billingEnabled ? wallet?.balance ?? 0 : Number.MAX_SAFE_INTEGER}
           selectedNodeId={selectedNodeId}
@@ -1360,7 +1456,7 @@ export function App() {
           <PanelRight size={18} />
           属性
         </div>
-        <Inspector node={selectedNode} models={modelOptions} onChange={updateNode} />
+        <Inspector node={selectedNode} models={modelOptions} workflows={workflowPresets} onChange={updateNode} />
       </aside>
 
       <footer className="statusbar">{status}</footer>

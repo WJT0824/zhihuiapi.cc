@@ -3,6 +3,7 @@ export type NodeKind =
   | "image"
   | "ai-generate"
   | "upscale"
+  | "workflow"
   | "resize"
   | "background"
   | "preview"
@@ -169,11 +170,50 @@ export interface GenerateImageResult {
   assetIds: string[];
   error?: string;
   overviewAssetId?: string;
+  fallback?: boolean;
+  code?: string;
+  progress?: number;
   billing?: {
     reservationId?: string;
     cost: number;
     refunded?: boolean;
   };
+}
+
+export type WorkflowKind = "upscale" | "vectorize" | "custom";
+
+export interface WorkflowPreset {
+  code: string;
+  name: string;
+  kind: WorkflowKind;
+  description: string;
+  points: number;
+  source: "builtin" | "uploaded";
+  builtIn: boolean;
+  requiresCustomWorkflow?: boolean;
+  targetLongEdge?: number;
+  scale?: number;
+  params?: Record<string, unknown>;
+  summary?: Record<string, unknown> | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface WorkflowLibrary {
+  comfy: { configured: boolean; enabled: boolean };
+  workflows: WorkflowPreset[];
+}
+
+export interface RunWorkflowParams {
+  code: string;
+  projectId?: string;
+  sourceNodeId?: string;
+  prompt?: string;
+  scale?: number;
+  width?: number;
+  height?: number;
+  referenceAssetIds?: string[];
+  onProgress?: (progress: number) => void;
 }
 
 export type TextTool = "chat" | "polish-prompt" | "reverse-prompt";
