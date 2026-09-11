@@ -79,6 +79,8 @@ export interface AssetRecord {
 }
 
 export interface AppSettings {
+  upstreamMode?: "platform" | "custom";
+  tokenFluxApiKeyConfigured?: boolean;
   tokenFluxApiKey?: string;
   tokenFluxBaseUrl?: string;
   defaultModel: string;

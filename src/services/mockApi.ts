@@ -11,7 +11,7 @@ const webIdentity = (() => {
   return { nickname: "本地用户", points: 100 };
 })();
 
-const DEFAULT_AI_BASE_URL = "https://tokenflux.cloud/v1";
+const DEFAULT_AI_BASE_URL = "";
 const SETTINGS_STORAGE_KEY = "zh_canvas_settings";
 const defaultBrowserSettings = (): AppSettings => ({
   tokenFluxBaseUrl: DEFAULT_AI_BASE_URL,
@@ -32,6 +32,25 @@ const loadBrowserSettings = (): AppSettings => {
 };
 
 let mockSettings: AppSettings = loadBrowserSettings();
+async function accountRequest(endpoint: string, body?: unknown) {
+  const token = localStorage.getItem("zh_token");
+  if (!token) throw new Error("请先登录网站账号。");
+  const origin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
+  const response = await fetch(origin + endpoint, {
+    method: body === undefined ? "GET" : "PUT",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || payload.detail || `请求失败（${response.status}）`);
+  return payload;
+}
+function acceptAccountSettings(user: { profile?: { settings?: Partial<AppSettings> } }) {
+  mockSettings = { ...mockSettings, tokenFluxApiKey: "", tokenFluxApiKeyConfigured: false, ...(user.profile?.settings || {}) };
+  persistSettings(mockSettings);
+  localStorage.setItem("zh_user", JSON.stringify(user));
+  return mockSettings;
+}
 const persistSettings = (settings: AppSettings) => {
   try {
     if (typeof localStorage !== "undefined") localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
@@ -200,107 +219,14 @@ export const mockApi: ZhihuiApi = {
   },
   ai: {
     async listModels() {
-      const inferTags = (value: string) => {
-        const lower = value.toLowerCase();
-        if (/image|img|dall|flux|gpt-image/.test(lower)) return ["text-to-image", "image-editing"] as const;
-        if (/(^|[^a-z])(gpt|o[0-9]|o1|claude|deepseek|codex|command|gemini|mini|compact|luna|sol|terra)([^a-z]|$)/i.test(lower)) return ["reasoning"] as const;
-        return ["reasoning"] as const;
-      };
-      const normalizeList = (items: Array<{ id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }>) =>
-        items
-          .filter((item) => item.modelId || item.id)
-          .map((item) => {
-            const id = item.modelId || item.id || "gpt-image-2";
-            const displayName = item.displayName || item.name || item.modelId || item.id || "GPT Image 2";
-            return {
-              id,
-              name: displayName,
-              tags: Array.isArray(item.tags) && item.tags.length ? item.tags.map(String) : [...inferTags(`${id} ${displayName}`)],
-            };
-          });
-      const cacheModels = (list: Array<{ id: string; name: string; tags: string[] }>) => {
-        try { localStorage.setItem("zh_models", JSON.stringify(list)); } catch {}
-        return list;
-      };
-      const mergeModels = (base: Array<{ id: string; name: string; tags: string[] }>, extra: Array<{ id: string; name: string; tags: string[] }>) => {
-        const merged = new Map(base.map((model) => [model.id.toLowerCase(), model]));
-        for (const model of extra) {
-          const key = model.id.toLowerCase();
-          const existing = merged.get(key);
-          if (!existing) {
-            merged.set(key, model);
-            continue;
-          }
-          const tags = [...new Set([...existing.tags, ...model.tags])];
-          merged.set(key, { ...existing, name: existing.name || model.name, tags });
-        }
-        return [...merged.values()];
-      };
-      const readCachedModels = () => {
-        try {
-          const cached = JSON.parse(localStorage.getItem("zh_models") || "[]");
-          return Array.isArray(cached) ? cached as Array<{ id: string; name: string; tags: string[] }> : [];
-        } catch {
-          return [];
-        }
-      };
-      const collected: Array<{ id: string; name: string; tags: string[] }> = [];
-      try {
-        const token = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
-        const savedKey = String(mockSettings.tokenFluxApiKey ?? "").trim();
-        const savedBase = String(mockSettings.tokenFluxBaseUrl ?? "").trim();
-        if (token && savedKey && savedBase) {
-          const syncOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
-          await fetch(`${syncOrigin}/v1/account`, {
-            method: "PUT",
-            headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-            body: JSON.stringify({ settings: { tokenFluxBaseUrl: savedBase, tokenFluxApiKey: savedKey } }),
-          });
-        }
-      } catch {}
-      try {
-        const platformOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
-        const platformToken = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
-        const platformResponse = await fetch(`${platformOrigin}/v1/models`, { headers: platformToken ? { authorization: `Bearer ${platformToken}` } : {} });
-        if (platformResponse.ok) {
-          const platformPayload = await platformResponse.json();
-          const platformModels = normalizeList((platformPayload.models || platformPayload.data || []) as Array<{ id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }>);
-          collected.push(...platformModels);
-        }
-      } catch {}
-      if (collected.length) return cacheModels(mergeModels(collected, readCachedModels()));
-      const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
-      const token = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
-      const readModels = async (path: string) => {
-        const response = await fetch(`${apiOrigin}${path}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
-        if (!response.ok) throw new Error(`模型列表读取失败（${response.status}）`);
-        const payload = await response.json();
-        return normalizeList((payload.models || payload.data || []) as Array<{ id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }>);
-      };
-      try {
-        const live = await readModels("/v1/models");
-        if (live.length) {
-          const hasImage = live.some((model) => model.tags.includes("text-to-image") || model.tags.includes("image-editing"));
-          if (hasImage || !live.some((model) => model.tags.includes("reasoning"))) return cacheModels(live);
-          return cacheModels([
-            { id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] },
-            ...live,
-          ]);
-        }
-      } catch {}
-      try {
-        const imageModels = await readModels("/v1/image/models");
-        if (imageModels.length) return cacheModels(imageModels);
-      } catch {}
-      try {
-        const cached = JSON.parse(localStorage.getItem("zh_models") || "[]");
-        if (Array.isArray(cached) && cached.length) return cached;
-      } catch {}
-      return cacheModels([
-        { id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] },
-        { id: "GPT-5.5", name: "GPT-5.5", tags: ["reasoning"] },
-        { id: "GPT-5.4", name: "GPT-5.4", tags: ["reasoning"] },
-      ]);
+      const response = await accountRequest("/v1/models?refresh=1");
+      const models = (response.models || []).map((item: { id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }) => ({
+        id: item.id || item.modelId || "",
+        name: item.displayName || item.name || item.id || item.modelId || "",
+        tags: item.tags || [],
+      })).filter((item: { id: string }) => item.id);
+      localStorage.setItem("zh_models", JSON.stringify(models));
+      return models;
     },
     async processText(params) {
       const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
@@ -312,8 +238,6 @@ export const mockApi: ZhihuiApi = {
           tool: params.tool,
           prompt: params.prompt,
           model: params.model || "gpt-5.5",
-          apiKey: String(mockSettings.tokenFluxApiKey ?? "").trim() || undefined,
-          baseUrl: String(mockSettings.tokenFluxBaseUrl ?? "").trim() || undefined,
         }),
       });
       const payload = await response.json().catch(() => ({}));
@@ -492,30 +416,28 @@ export const mockApi: ZhihuiApi = {
   },
   settings: {
     async get() {
-      return mockSettings;
+      if (!localStorage.getItem("zh_token")) return mockSettings;
+      const payload = await accountRequest("/v1/account");
+      const saved = payload.user.profile?.settings || {};
+      // Migrate a legacy browser key once; an existing account configuration wins.
+      if (saved.upstreamMode === undefined && saved.tokenFluxBaseUrl === undefined && mockSettings.tokenFluxApiKey && mockSettings.tokenFluxBaseUrl) {
+        return this.set({ ...mockSettings, upstreamMode: "custom" });
+      }
+      return acceptAccountSettings(payload.user);
     },
     async set(settings: AppSettings) {
-      Object.assign(mockSettings, settings);
-      persistSettings(mockSettings);
-      try {
-        const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
-        const token = localStorage.getItem("zh_token");
-        if (token) {
-          await fetch(`${apiOrigin}/v1/account`, {
-            method: "PUT",
-            headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-            body: JSON.stringify({
-              settings: {
-                tokenFluxBaseUrl: mockSettings.tokenFluxBaseUrl || "",
-                tokenFluxApiKey: mockSettings.tokenFluxApiKey || "",
-                defaultModel: mockSettings.defaultModel,
-                defaultRatio: mockSettings.defaultRatio,
-              },
-            }),
-          });
-        }
-      } catch {}
-      return mockSettings;
+      const next = { ...settings };
+      const platform = next.upstreamMode === "platform";
+      if (platform) {
+        next.tokenFluxApiKey = "";
+        next.tokenFluxBaseUrl = "";
+      } else if (!next.tokenFluxApiKey?.trim()) {
+        // An omitted key keeps the server-side secret; an empty string clears it.
+        delete next.tokenFluxApiKey;
+      }
+      const payload = await accountRequest("/v1/account", { settings: next });
+      localStorage.removeItem("zh_models");
+      return acceptAccountSettings(payload.user);
     },
     async testApiKey(apiKey?: string, baseUrl?: string, mode: "models" | "image" | "reasoning" = "models") {
       try {
@@ -538,14 +460,6 @@ export const mockApi: ZhihuiApi = {
                 tags: Array.isArray(item.tags) && item.tags.length ? item.tags.map(String) : mode === "models" ? ["reasoning"] : ["image-editing"],
               }))
           : [];
-        if (!response.ok && !models.length) {
-          try {
-            const cached = JSON.parse(localStorage.getItem("zh_models") || "[]");
-            if (Array.isArray(cached) && cached.length) {
-              return { ok: true, message: `${payload.message || payload.error || "上游暂时不可用，已使用本地缓存模型"}`, models: cached };
-            }
-          } catch {}
-        }
         return { ok: response.ok, message: payload.message || payload.error || payload.detail || "连接失败", models };
       } catch {
         return { ok: false, message: "连接失败：无法访问测试接口，请检查网络后重试" };
