@@ -166,6 +166,7 @@ const readConfiguredUpstream = (value = {}) => ({
 });
 const accountAiOverride = (user) => {
   const settings = user?.profile?.settings || {};
+  if (settings.upstreamMode === 'platform') return undefined;
   const config = readConfiguredUpstream(settings);
   return config.baseUrl && config.apiKey ? { ...config, baseUrl: normalizeUpstreamBase(config.baseUrl), apiKey: normalizeApiKey(config.apiKey), model: settings.defaultModel || activeAiConfig().model } : undefined;
 };
