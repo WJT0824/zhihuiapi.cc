@@ -72,10 +72,19 @@ export function SettingsModal({
         </header>
         <div className="settings-form">
           <label>
+            AI 服务来源
+            <select value={draft.upstreamMode ?? "custom"} onChange={(event) => set("upstreamMode", event.target.value as AppSettings["upstreamMode"])}>
+              <option value="platform">使用网站平台默认上游</option>
+              <option value="custom">使用我自己的中转站</option>
+            </select>
+            <small className="settings-hint">切换后立即影响模型读取、提示词润色和生图任务，不需要重新安装插件。</small>
+          </label>
+          <label>
             上游 API Key
             <input
               type="password"
               value={draft.tokenFluxApiKey ?? ""}
+              disabled={draft.upstreamMode === "platform"}
               onChange={(event) => set("tokenFluxApiKey", event.target.value)}
               placeholder="留空时默认使用平台已配置服务"
             />
@@ -85,6 +94,7 @@ export function SettingsModal({
             API 中转地址
             <input
               value={draft.tokenFluxBaseUrl ?? ""}
+              disabled={draft.upstreamMode === "platform"}
               onChange={(event) => set("tokenFluxBaseUrl", event.target.value)}
               placeholder="https://example.com、https://example.com/v1 或带路径的兼容地址"
             />
