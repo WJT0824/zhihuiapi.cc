@@ -72,21 +72,21 @@ export function SettingsModal({
         </header>
         <div className="settings-form">
           <label>
-            TokenFlux API Key
+            上游 API Key
             <input
               type="password"
               value={draft.tokenFluxApiKey ?? ""}
               onChange={(event) => set("tokenFluxApiKey", event.target.value)}
               placeholder="留空时默认使用平台已配置服务"
             />
-            <small className="settings-hint">留空则无需每次输入，网页端自动使用平台默认 AI 服务。</small>
+            <small className="settings-hint">填写后只对当前账号生效；留空则使用运营后台配置的平台服务。更换中转地址时请同时更换对应 Key。</small>
           </label>
           <label>
             API 中转地址
             <input
               value={draft.tokenFluxBaseUrl ?? ""}
               onChange={(event) => set("tokenFluxBaseUrl", event.target.value)}
-              placeholder="https://tokenflux.cloud/v1"
+              placeholder="https://example.com、https://example.com/v1 或带路径的兼容地址"
             />
           </label>
           <div className="inline-actions">

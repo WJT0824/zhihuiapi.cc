@@ -268,25 +268,6 @@ export const mockApi: ZhihuiApi = {
           collected.push(...platformModels);
         }
       } catch {}
-      const apiKey = String(mockSettings.tokenFluxApiKey ?? "").trim();
-      const customBase = String(mockSettings.tokenFluxBaseUrl ?? "").trim().replace(/\/+$/, "");
-      if (apiKey && customBase) {
-        try {
-          const versionedBase = /\/v\d+$/i.test(customBase) ? customBase : `${customBase}/v1`;
-          const response = await fetch(`${versionedBase}/models`, { headers: { authorization: `Bearer ${apiKey}` } });
-          if (response.ok) {
-            const payload = await response.json();
-            const direct = normalizeList((payload.models || payload.data || []) as Array<{ id?: string; modelId?: string; displayName?: string; name?: string; tags?: string[] }>);
-            if (direct.length) {
-              const merged = mergeModels(collected, direct);
-              if (!merged.some((model) => model.tags.includes("text-to-image") || model.tags.includes("image-editing"))) {
-                merged.unshift({ id: "gpt-image-2", name: "GPT Image 2", tags: ["text-to-image", "image-editing"] });
-              }
-              return cacheModels(mergeModels(mergeModels(merged, collected), readCachedModels()));
-            }
-          }
-        } catch {}
-      }
       if (collected.length) return cacheModels(mergeModels(collected, readCachedModels()));
       const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
       const token = typeof localStorage !== "undefined" ? localStorage.getItem("zh_token") : "";
@@ -539,10 +520,13 @@ export const mockApi: ZhihuiApi = {
     async testApiKey(apiKey?: string, baseUrl?: string, mode: "models" | "image" | "reasoning" = "models") {
       try {
         const apiOrigin = ["localhost", "127.0.0.1"].includes(location.hostname) ? location.origin : "https://zhihuiapicc-production.up.railway.app";
+        const requestBody: Record<string, string> = { mode };
+        if (apiKey?.trim()) { requestBody.apiKey = apiKey.trim(); requestBody.baseUrl = baseUrl || mockSettings.tokenFluxBaseUrl || ""; }
+        else if (baseUrl && baseUrl !== mockSettings.tokenFluxBaseUrl) requestBody.baseUrl = baseUrl;
         const response = await fetch(`${apiOrigin}/v1/ai/test-connection`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ apiKey: apiKey || "", baseUrl: baseUrl || mockSettings.tokenFluxBaseUrl, mode }),
+          headers: { "content-type": "application/json", ...(localStorage.getItem("zh_token") ? { authorization: `Bearer ${localStorage.getItem("zh_token")}` } : {}) },
+          body: JSON.stringify(requestBody),
         });
         const payload = await response.json();
         const models = Array.isArray(payload.models)

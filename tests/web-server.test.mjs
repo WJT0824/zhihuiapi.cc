@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 
 const port = 18787;
 const origin = `http://127.0.0.1:${port}`;
@@ -71,4 +72,33 @@ test('gateway account, reference upload, and job contract', async () => {
   assert.equal(removed.body.success, true);
   const account = await request('/v1/account', { headers: authHeader });
   assert.equal(account.body.user.email, email);
+});
+
+test('account upstream can be switched at runtime with a prefixed /v1 URL', async () => {
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/prefix/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ id: 'gpt-image-2.5', owned_by: 'switchable', supported_endpoint_types: ['images'] }, { id: 'reasoning-x', owned_by: 'switchable', supported_endpoint_types: ['chat'] }] }));
+      return;
+    }
+    res.writeHead(404); res.end();
+  });
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const port = upstream.address().port;
+  try {
+    const email = `switch-${Date.now()}@example.com`;
+    const registered = await request('/v1/auth/register', { method: 'POST', body: JSON.stringify({ email, nickname: `切换${Date.now()}`, password: 'testpass123' }) });
+    const authHeader = { authorization: `Bearer ${registered.body.access_token}` };
+    const saved = await request('/v1/account', { method: 'PUT', headers: authHeader, body: JSON.stringify({ settings: { tokenFluxBaseUrl: `http://127.0.0.1:${port}/prefix/v1`, tokenFluxApiKey: 'switch-key' } }) });
+    assert.equal(saved.status, 200);
+    const models = await request('/v1/models?refresh=1', { headers: authHeader });
+    assert.equal(models.status, 200);
+    assert.equal(models.body.source, 'account');
+    assert.deepEqual(models.body.models.map((model) => model.id), ['gpt-image-2.5', 'reasoning-x']);
+    const tested = await request('/v1/ai/test-connection', { method: 'POST', headers: authHeader, body: JSON.stringify({ baseUrl: `http://127.0.0.1:${port}/prefix/v1`, apiKey: 'switch-key', mode: 'image' }) });
+    assert.equal(tested.status, 200);
+    assert.equal(tested.body.matchedModels[0].id, 'gpt-image-2.5');
+  } finally {
+    await new Promise((resolve) => upstream.close(resolve));
+  }
 });

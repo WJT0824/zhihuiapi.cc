@@ -3,6 +3,7 @@ import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { existsSync, createReadStream, createWriteStream, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { normalizeUpstreamBase, normalizeApiKey, upstreamUrls, upstreamAuthHeaders, fetchUpstream } from './upstream.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -70,8 +71,9 @@ const studioModels = () => {
   return common;
 };
 
-async function submitRemoteTask(task) {
-  if (!AI_BASE_URL || !AI_API_KEY) return;
+async function submitRemoteTask(task, override) {
+  const ai = override || activeAiConfig();
+  if (!ai.baseUrl || !ai.apiKey) return;
   const model = String(task.model || '');
   const prompt = String(task.prompt || '');
   const body = { ...(task.request || {}), model, prompt };
@@ -80,9 +82,9 @@ async function submitRemoteTask(task) {
   if (model === 'T香蕉2' || model === 'T香蕉pro') endpoint = `/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   if (/grok-video|veo3/.test(model)) endpoint = '/v1/videos';
   if (/sora-v3/.test(model)) endpoint = '/v1/video/submit/generate';
-  const res = await fetch(AI_BASE_URL + endpoint, {
+  const res = await fetchUpstream(ai.baseUrl, endpoint.replace(/^\//, ''), {
     method: 'POST',
-    headers: { authorization: `Bearer ${AI_API_KEY}`, 'content-type': 'application/json' },
+    headers: upstreamAuthHeaders(ai.apiKey, { 'content-type': 'application/json' }),
     body: JSON.stringify(body),
   });
   const json = await res.json().catch(() => ({}));
@@ -103,14 +105,15 @@ async function submitRemoteTask(task) {
   }
 }
 
-async function pollRemoteTask(task) {
-  if (!task.remoteTaskId || !AI_BASE_URL || !AI_API_KEY) return;
+async function pollRemoteTask(task, override) {
+  const ai = override || activeAiConfig();
+  if (!task.remoteTaskId || !ai.baseUrl || !ai.apiKey) return;
   const model = String(task.model || '');
   let endpoint = `/v1/images/tasks/${encodeURIComponent(task.remoteTaskId)}`;
   if (/sora-v3/.test(model)) endpoint = `/v1/video/fetch/${encodeURIComponent(task.remoteTaskId)}`;
   if (/grok-video|veo3/.test(model)) endpoint = `/v1/videos/${encodeURIComponent(task.remoteTaskId)}`;
-  const res = await fetch(AI_BASE_URL + endpoint, {
-    headers: { authorization: `Bearer ${AI_API_KEY}` },
+  const res = await fetchUpstream(ai.baseUrl, endpoint.replace(/^\//, ''), {
+    headers: upstreamAuthHeaders(ai.apiKey),
   });
   if (!res.ok) return;
   const json = await res.json().catch(() => ({}));
@@ -145,16 +148,28 @@ const activeAiConfig = () => {
   const stored = store.aiConfig || {};
   return {
     baseUrl: normalizeUpstreamBase(stored.baseUrl || AI_BASE_URL || ''),
-    apiKey: String(stored.apiKey || AI_API_KEY || '').trim(),
+    apiKey: normalizeApiKey(stored.apiKey || AI_API_KEY),
     model: String(stored.model || AI_IMAGE_MODEL || 'gpt-image-2').trim() || 'gpt-image-2',
   };
 };
-const normalizeUpstreamBase = (value) => String(value || '')
-  .trim()
-  .replace(/\/+$/, '')
-  .replace(/\/(?:chat\/completions|images\/(?:generations|edits|models)|models)$/i, '')
-  .replace(/\/v\d+(?:beta)?$/i, '')
-  .replace(/\/v\d+$/i, '');
+const readConfiguredUpstream = (value = {}) => ({
+  baseUrl: String(value.baseUrl || value.aiBaseUrl || value.upstreamBaseUrl || value.apiBaseUrl || value.tokenFluxBaseUrl || '').trim(),
+  apiKey: String(value.apiKey || value.aiApiKey || value.upstreamApiKey || value.tokenFluxApiKey || value.key || '').trim(),
+});
+const accountAiOverride = (user) => {
+  const settings = user?.profile?.settings || {};
+  const config = readConfiguredUpstream(settings);
+  return config.baseUrl && config.apiKey ? { ...config, baseUrl: normalizeUpstreamBase(config.baseUrl), apiKey: normalizeApiKey(config.apiKey), model: settings.defaultModel || activeAiConfig().model } : undefined;
+};
+const resolveAiConfig = (user, body = {}) => {
+  if (body.upstreamMode === 'platform') return activeAiConfig();
+  const supplied = readConfiguredUpstream(body);
+  if (supplied.baseUrl || supplied.apiKey) {
+    if (!supplied.baseUrl || !supplied.apiKey) throw new Error('切换中转站时请同时填写地址和对应的 API Key。');
+    return { baseUrl: normalizeUpstreamBase(supplied.baseUrl), apiKey: normalizeApiKey(supplied.apiKey), model: body.model || body.defaultModel || activeAiConfig().model };
+  }
+  return accountAiOverride(user) || activeAiConfig();
+};
 const publicPluginConfig = () => {
   const ai = activeAiConfig();
   return {
@@ -175,6 +190,7 @@ const gatewayModels = () => {
   return [{ id: model, modelId: model, displayName, name: displayName, providerName: '郅绘 AI 网关', price: 3, recommended: true, tags: ['text-to-image', 'image-editing'], capabilities: { supportsEdit: true, maxReferences: 10, aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'], resolutions: ['1K', '2K', '4K'], qualities: ['auto', 'high', 'medium', 'low'] } }];
 };
 const normalizeLiveModelItem = (item, configModel = '') => {
+  if (typeof item === 'string') item = { id: item };
   const id = String(item.id || item.modelId || item.name || '').trim();
   const rawName = String(item.name || item.displayName || id || '').trim();
   const lower = `${id} ${rawName}`.toLowerCase();
@@ -183,9 +199,9 @@ const normalizeLiveModelItem = (item, configModel = '') => {
   const hasReasoningEndpoint = endpoints.some((name) => name.includes('chat') || name.includes('reason') || name.includes('completion') || name.includes('text'));
   const looksLikeImage = /(^|[^a-z])(gpt-image|dall|flux|image|img)([^a-z]|$)/i.test(lower);
   const looksLikeReasoning = /(^|[^a-z])(gpt|o[0-9]|o1|claude|deepseek|codex|command|gemini|mini|compact|luna|sol|terra)([^a-z]|$)/i.test(lower) && !/video|image|img/i.test(lower);
-  let tags = [];
+  let tags = Array.isArray(item.tags) ? item.tags.map(String) : [];
   if (!/video|image|img/i.test(lower) && (hasReasoningEndpoint || looksLikeReasoning)) tags.push('reasoning');
-  if (hasImageEndpoint || looksLikeImage) tags = ['text-to-image', 'image-editing'];
+  if (hasImageEndpoint || looksLikeImage || tags.includes('text-to-image') || tags.includes('image-editing')) tags = ['text-to-image', 'image-editing'];
   if (!tags.length && !endpoints.length) tags.push('reasoning');
   if (!tags.length) tags = ['reasoning'];
   return {
@@ -200,86 +216,48 @@ const normalizeLiveModelItem = (item, configModel = '') => {
   };
 };
 const modelsFromPayload = (payload, configModel = '') => {
-  const source = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
+  const source = Array.isArray(payload) ? payload : Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
   return source.map((item) => normalizeLiveModelItem(item, configModel)).filter((model) => model.id);
 };
+const modelCaches = new Map();
+const modelSourceKey = (config) => hash(JSON.stringify([normalizeUpstreamBase(config.baseUrl), normalizeApiKey(config.apiKey)]));
 const readUpstreamModels = async (baseUrl, apiKey) => {
-  const base = normalizeUpstreamBase(baseUrl);
-  const candidates = [`${base}/v1/models`, `${base}/v1/images/models`, `${base}/models`];
-  let lastError;
-  for (const endpoint of candidates) {
-    try {
-      const response = await fetch(endpoint, { headers: { authorization: `Bearer ${apiKey}` } });
-      if (!response.ok) {
-        lastError = new Error(`模型接口返回 ${response.status}`);
-        continue;
-      }
-      const models = modelsFromPayload(await response.json());
-      if (models.length) return models;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  if (lastError) throw lastError;
-  return [];
+  const results = await Promise.allSettled(['models', 'images/models'].map(async (resource) => {
+    const response = await fetchUpstream(baseUrl, resource, { headers: upstreamAuthHeaders(apiKey), signal: AbortSignal.timeout(12000) });
+    if (!response.ok) throw new Error(`模型接口返回 HTTP ${response.status}`);
+    const payload = await response.json();
+    return modelsFromPayload(payload).map((model) => resource === 'images/models'
+      ? { ...model, tags: ['text-to-image', 'image-editing'] } : model);
+  }));
+  const models = mergeGatewayModelLists(...results.filter((r) => r.status === 'fulfilled').map((r) => r.value));
+  if (models.length) return models;
+  const failed = results.find((r) => r.status === 'rejected');
+  throw failed?.reason || new Error('连接成功，但上游没有返回模型列表。');
 };
-const liveGatewayModels = async (override) => {
-  const config = override?.baseUrl && override?.apiKey
-    ? { ...activeAiConfig(), baseUrl: normalizeUpstreamBase(override.baseUrl), apiKey: String(override.apiKey).trim() }
-    : activeAiConfig();
+const liveGatewayModels = async (override, force = false) => {
+  const config = override || activeAiConfig();
   if (!config.baseUrl || !config.apiKey) return gatewayModels();
-  try {
-    const live = await readUpstreamModels(config.baseUrl, config.apiKey);
-    const ordered = new Map();
-    for (const fallback of gatewayModels()) {
-      const key = fallback.modelId || fallback.id;
-      if (key) ordered.set(key, fallback);
-    }
-    for (const model of live) {
-      const key = model.modelId || model.id;
-      if (key && !ordered.has(key)) ordered.set(key, model);
-    }
-    const merged = [...ordered.values()];
-    if (merged.length > 1) {
-      store.modelCache = merged;
-      void persist();
-    }
-    return merged;
-  } catch {
-    return gatewayModels();
-  }
-};
-const imageGatewayModels = async () => {
-  const live = await liveGatewayModels();
-  const ordered = new Map();
-  for (const fallback of gatewayModels()) {
-    const key = fallback.modelId || fallback.id;
-    if (key) ordered.set(key, fallback);
-  }
-  for (const model of live) {
-    const key = model.modelId || model.id;
-    if (key && !ordered.has(key)) ordered.set(key, model);
-  }
-  if (![...ordered.values()].some((model) => model.tags?.includes('text-to-image') || model.tags?.includes('image-editing'))) {
-    for (const fallback of gatewayModels()) {
-      const key = fallback.modelId || fallback.id;
-      if (key) ordered.set(key, fallback);
-    }
-  }
-  return [...ordered.values()];
+  const key = modelSourceKey(config);
+  const cached = modelCaches.get(key);
+  if (!force && cached && Date.now() - cached.at < 30000) return cached.models;
+  const models = await readUpstreamModels(config.baseUrl, config.apiKey);
+  modelCaches.set(key, { at: Date.now(), models });
+  if (modelCaches.size > 100) modelCaches.delete(modelCaches.keys().next().value);
+  return models;
 };
 const mergeGatewayModelLists = (...lists) => {
   const merged = new Map();
   for (const list of lists) {
     for (const model of list || []) {
-      const key = String(model.modelId || model.id || '').toLowerCase();
+      const key = String(model.modelId || model.id || '');
       if (!key) continue;
       const existing = merged.get(key);
       if (!existing) {
         merged.set(key, model);
         continue;
       }
-      const tags = [...new Set([...(existing.tags || []), ...(model.tags || [])])];
+      let tags = [...new Set([...(existing.tags || []), ...(model.tags || [])])];
+      if (tags.includes('text-to-image') || tags.includes('image-editing')) tags = tags.filter((tag) => tag !== 'reasoning');
       merged.set(key, { ...existing, name: existing.name || model.name, displayName: existing.displayName || model.displayName, tags });
     }
   }
@@ -428,9 +406,9 @@ async function runGatewayGeneration(job, user, referenceIds, aiOverride, maskId)
         const maskFile = await readFile(maskRef.path);
         form.append('mask', new Blob([maskFile], { type: maskRef.mimeType || 'image/png' }), maskRef.fileName || 'mask.png');
       }
-      response = await fetch(`${upstreamBase}/v1/images/edits`, { method: 'POST', headers, body: form });
+      response = await fetchUpstream(upstreamBase, 'images/edits', { method: 'POST', headers, body: form });
     } else {
-      response = await fetch(`${upstreamBase}/v1/images/generations`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(nextPayload) });
+      response = await fetchUpstream(upstreamBase, 'images/generations', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(nextPayload) });
     }
     return { response, json: await response.json().catch(() => ({})) };
   };
@@ -495,7 +473,7 @@ async function processUpstreamText(body) {
   let lastError = '';
   for (const model of [...new Set(candidates.filter(Boolean))].slice(0, 8)) {
     try {
-      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      const response = await fetchUpstream(baseUrl, 'chat/completions', {
         method: 'POST',
         headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -565,32 +543,29 @@ async function gateway(req, res, pathName) {
     return send(res, 200, { success: true, access_token: accessToken });
   }
   if (req.method === 'POST' && pathName === '/v1/ai/test-connection') {
-    const platform = activeAiConfig();
-    const apiKey = String(body.apiKey || platform.apiKey || '').trim();
-    const baseUrl = normalizeUpstreamBase(body.baseUrl || platform.baseUrl || '');
-    const mode = String(body.mode || 'models');
-    if (!apiKey || !baseUrl) return fail(400, body.apiKey || body.baseUrl ? '请输入 API Key 和服务地址' : '服务器尚未配置默认 AI 服务，请联系管理员在运营后台配置');
+    const testUser = tokenUser(req);
+    if (!testUser) return fail(401, '请先登录平台账号');
     try {
-      if (mode === 'reasoning') {
-        const response = await fetch(`${baseUrl}/v1/chat/completions`, { headers: { authorization: `Bearer ${apiKey}` } });
-        if (response.ok) return send(res, 200, { success: true, message: '推理模型连接成功', models: [] });
-        const text = await response.text();
-        return fail(400, `连接失败（${response.status}）：${text.slice(0, 180)}`);
+      if (body.scope === 'platform' && testUser.role !== 'admin') return fail(403, '需要管理员权限');
+      const saved = body.scope === 'platform' ? activeAiConfig() : resolveAiConfig(testUser);
+      const supplied = readConfiguredUpstream(body);
+      // Blank key may reuse a saved key only for exactly the same API base.
+      let config = saved;
+      if (supplied.baseUrl || supplied.apiKey) {
+        const baseUrl = normalizeUpstreamBase(supplied.baseUrl || saved.baseUrl);
+        const apiKey = normalizeApiKey(supplied.apiKey || (baseUrl === normalizeUpstreamBase(saved.baseUrl) ? saved.apiKey : ''));
+        if (!apiKey) throw new Error('更换中转地址时，请填写新站对应的 API Key。');
+        config = { ...saved, baseUrl, apiKey };
       }
-      const models = await readUpstreamModels(baseUrl, apiKey);
-      if (models.length) return send(res, 200, { success: true, message: `API 连接成功，已读取 ${models.length} 个模型${body.apiKey || body.baseUrl ? '' : '（默认使用平台服务）'}`, models });
-      return fail(400, '连接成功，但没有读取到模型列表，请检查中转地址的模型接口。');
+      if (body.upstreamMode === 'platform') config = activeAiConfig();
+      if (!config.apiKey || !config.baseUrl) throw new Error('尚未配置 AI 服务，请填写中转地址和 API Key。');
+      const allModels = await readUpstreamModels(config.baseUrl, config.apiKey);
+      const mode = String(body.mode || 'models');
+      const matching = mode === 'image' ? allModels.filter((m) => m.tags.includes('text-to-image') || m.tags.includes('image-editing'))
+        : mode === 'reasoning' ? allModels.filter((m) => m.tags.includes('reasoning')) : allModels;
+      if (!matching.length) throw new Error(`已读取 ${allModels.length} 个模型，但未识别到${mode === 'image' ? '图像' : '推理'}模型；请核对上游模型列表和标签。`);
+      return send(res, 200, { success: true, baseUrl: config.baseUrl, endpoints: { models: upstreamUrls(config.baseUrl, 'models')[0], images: upstreamUrls(config.baseUrl, 'images/generations')[0], text: upstreamUrls(config.baseUrl, 'chat/completions')[0] }, models: allModels, matchedModels: matching, message: `连接成功：共 ${allModels.length} 个模型${mode === 'models' ? '' : '，其中' + (mode === 'image' ? '图像' : '推理') + '模型 ' + matching.length + ' 个'}。已验证模型列表，实际生成以运行结果为准。` });
     } catch (error) {
-      const fallback = mergeGatewayModelLists(store.modelCache || [], gatewayModels());
-      if (fallback.length) {
-        const reason = String(error.message || error).slice(0, 120);
-        return send(res, 200, {
-          success: true,
-          message: `上游模型接口暂时不可用（${reason}），已使用平台缓存/默认模型列表`,
-          models: fallback,
-          degraded: true,
-        });
-      }
       return fail(400, `连接失败：${String(error.message || error).slice(0, 180)}`);
     }
   }
@@ -598,12 +573,8 @@ async function gateway(req, res, pathName) {
   if (!user) return fail(401, '请先登录平台账号');
   if (req.method === 'POST' && pathName === '/v1/ai/text') {
     try {
-      const accountAi = user.profile?.settings || {};
-      const result = await processUpstreamText({
-        ...body,
-        apiKey: body.apiKey || accountAi.tokenFluxApiKey,
-        baseUrl: body.baseUrl || accountAi.tokenFluxBaseUrl,
-      });
+      const ai = resolveAiConfig(user, body);
+      const result = await processUpstreamText({ ...body, apiKey: ai.apiKey, baseUrl: ai.baseUrl });
       return send(res, 200, { success: true, text: result.text, model: result.model });
     } catch (error) {
       return fail(400, error.message || String(error));
@@ -617,19 +588,26 @@ async function gateway(req, res, pathName) {
       if (store.users.some((u) => u.id !== user.id && (u.nickname || '').toLowerCase() === nickname.toLowerCase())) return fail(409, '该昵称已存在');
       user.nickname = nickname; user.displayName = nickname;
     }
-    user.profile = Object.assign({}, user.profile || {}, body.profile && typeof body.profile === 'object' ? body.profile : {});
-    if (body.settings && typeof body.settings === 'object') user.profile.settings = Object.assign({}, user.profile.settings || {}, body.settings);
+    const incoming = { ...(body.profile?.settings || {}), ...(body.settings || {}) };
+    if (incoming.tokenFluxBaseUrl !== undefined) {
+      try { incoming.tokenFluxBaseUrl = normalizeUpstreamBase(incoming.tokenFluxBaseUrl); }
+      catch (error) { return fail(400, error.message); }
+    }
+    if (incoming.tokenFluxApiKey !== undefined) incoming.tokenFluxApiKey = normalizeApiKey(incoming.tokenFluxApiKey);
+    const previousSettings = user.profile?.settings || {};
+    const nextSettings = { ...previousSettings, ...incoming };
+    if (nextSettings.tokenFluxApiKey && !nextSettings.tokenFluxBaseUrl) return fail(400, '请填写 API Key 对应的中转地址。');
+    if (incoming.tokenFluxBaseUrl && incoming.tokenFluxBaseUrl !== previousSettings.tokenFluxBaseUrl && incoming.tokenFluxApiKey === undefined && previousSettings.tokenFluxApiKey) return fail(400, '更换中转地址时请同时填写对应的 API Key。');
+    user.profile = { ...(user.profile || {}), ...(body.profile || {}), settings: nextSettings };
     await persist();
     return send(res, 200, { success: true, user: safeUser(user) });
   }
   if (req.method === 'GET' && (pathName === '/v1/models' || pathName === '/v1/image/models')) {
-    const accountAi = user.profile?.settings || {};
-    const accountOverride = accountAi.tokenFluxBaseUrl && accountAi.tokenFluxApiKey
-      ? { baseUrl: accountAi.tokenFluxBaseUrl, apiKey: accountAi.tokenFluxApiKey }
-      : undefined;
-    const platformModels = await liveGatewayModels();
-    const accountModels = accountOverride ? await liveGatewayModels(accountOverride) : [];
-    return send(res, 200, { success: true, models: mergeGatewayModelLists(gatewayModels(), store.modelCache || [], platformModels, accountModels) });
+    try {
+      const config = resolveAiConfig(user);
+      const models = await liveGatewayModels(config, route(req).query.get('refresh') === '1');
+      return send(res, 200, { success: true, models, source: accountAiOverride(user) ? 'account' : 'platform' });
+    } catch (error) { return fail(502, error.message); }
   }
   if (req.method === 'POST' && pathName === '/v1/image/references') {
     if (!files.length) return fail(400, '没有收到参考图');
@@ -655,15 +633,12 @@ async function gateway(req, res, pathName) {
     if (existingJob) return send(res, 200, gatewayJob(existingJob));
     const cost = 3 * Math.max(1, Math.min(4, Number(body.quantity) || 1));
     if (user.role !== 'admin' && user.points < cost) return fail(402, '积分不足');
-    const job = { id: uid(), requestId, userId: user.id, prompt: String(body.prompt || ''), model: String(body.model || body.modelId || AI_IMAGE_MODEL), aspectRatio: String(body.aspect_ratio || '1:1'), resolution: String(body.resolution || '1K'), quality: String(body.quality || 'auto'), quantity: Math.max(1, Math.min(4, Number(body.quantity) || 1)), status: 'processing', cost, createdAt: now() };
+    let aiOverride;
+    try { aiOverride = resolveAiConfig(user, { ...body, baseUrl: body.baseUrl || body.ai_base_url || req.headers['x-ai-base-url'], apiKey: body.apiKey || body.ai_api_key || req.headers['x-ai-key'] }); }
+    catch (error) { return fail(400, error.message); }
+    const job = { id: uid(), requestId, userId: user.id, prompt: String(body.prompt || ''), model: String(body.model || body.modelId || aiOverride.model), aspectRatio: String(body.aspect_ratio || '1:1'), resolution: String(body.resolution || '1K'), quality: String(body.quality || 'auto'), quantity: Math.max(1, Math.min(4, Number(body.quantity) || 1)), status: 'processing', cost, createdAt: now() };
     if (user.role !== 'admin') user.points -= cost;
     store.jobs.push(job); store.ledger.push({ id: uid(), userId: user.id, type: 'image', points: user.role === 'admin' ? 0 : -cost, requestId, createdAt: now() }); await persist();
-    const overrideBaseUrl = String(body.baseUrl || body.ai_base_url || req.headers['x-ai-base-url'] || '').trim();
-    const overrideApiKey = String(body.apiKey || body.ai_api_key || req.headers['x-ai-key'] || '').trim();
-    const accountAi = user.profile?.settings || {};
-    const aiOverride = overrideBaseUrl && overrideApiKey
-      ? { baseUrl: overrideBaseUrl, apiKey: overrideApiKey }
-      : (accountAi.tokenFluxBaseUrl && accountAi.tokenFluxApiKey ? { baseUrl: accountAi.tokenFluxBaseUrl, apiKey: accountAi.tokenFluxApiKey } : undefined);
     const maskId = String(body.mask_id || body.maskId || '').trim();
     try { await runGatewayGeneration(job, user, Array.isArray(body.reference_ids) ? body.reference_ids : [], aiOverride, maskId); await persist(); }
     catch (err) { if (user.role !== 'admin') user.points += cost; job.status = 'failed'; job.error = String(err.message || err).slice(0, 500); store.ledger.push({ id: uid(), userId: user.id, type: 'image-refund', points: user.role === 'admin' ? 0 : cost, requestId, createdAt: now() }); await persist(); }
@@ -796,9 +771,10 @@ async function api(req, res, pathName) {
   if (req.method === 'POST' && (pathName === '/api/v1/tasks' || pathName === '/api/v1/studio/generate' || pathName === '/api/v1/studio/tasks')) {
     const cost = 10; const prompt = String(body.prompt || '').trim(); if (!prompt) return send(res,400,{error:'请输入创作描述。'}); if (user.points < cost) return send(res,402,{error:'积分不足。'});
     user.points -= cost; const task = { id: uid(), userId: user.id, prompt, model: body.model || 'gpt-image-2', mode: body.mode || (Array.isArray(body.images) && body.images.length ? 'edit' : 'generate'), status: 'queued', cost, progress: 0, request: body, createdAt: now() }; store.tasks.push(task); store.ledger.push({id:uid(),userId:user.id,type:'task',points:-cost,taskId:task.id,createdAt:now()});
-    await submitRemoteTask(task);
+    const accountAi = accountAiOverride(user);
+    await submitRemoteTask(task, accountAi);
     if (task.status === 'queued' && task.remoteTaskId) task.status = 'processing';
-    if (!AI_BASE_URL || !AI_API_KEY) {
+    if (!(accountAi || activeAiConfig()).baseUrl || !(accountAi || activeAiConfig()).apiKey) {
       task.status = 'completed';
       task.completedAt = now();
       task.progress = 100;
@@ -807,7 +783,7 @@ async function api(req, res, pathName) {
     await persist();
     if (task.status === 'processing') {
       const poll = setInterval(async () => {
-        await pollRemoteTask(task);
+        await pollRemoteTask(task, accountAi);
         await persist();
         if (task.status === 'completed' || task.status === 'failed') clearInterval(poll);
       }, 5000);
@@ -826,7 +802,7 @@ async function api(req, res, pathName) {
   }
   if (req.method === 'GET' && pathName === '/api/v1/studio/models') return send(res, 200, { models: studioModels() });
   if (req.method === 'GET' && pathName === '/api/v1/studio/profile') return send(res, 200, { user: safeUser(user) });
-  if (req.method === 'GET' && pathName === '/api/v1/studio/config') return send(res, 200, { apiOrigin: PUBLIC_API_ORIGIN || `http://${req.headers.host || 'localhost'}`, compatibility: 'zhihui-v1', models: studioModels(), aiEnabled: Boolean(AI_BASE_URL && AI_API_KEY) });
+  if (req.method === 'GET' && pathName === '/api/v1/studio/config') { const ai = activeAiConfig(); return send(res, 200, { apiOrigin: PUBLIC_API_ORIGIN || `http://${req.headers.host || 'localhost'}`, compatibility: 'zhihui-v1', models: studioModels(), aiEnabled: Boolean(ai.baseUrl && ai.apiKey), upstreamBaseUrl: ai.baseUrl || undefined }); }
   const studioTask = pathName.match(/^\/api\/v1\/studio\/tasks\/([^/]+)$/);
   if (req.method === 'GET' && studioTask) { const task = store.tasks.find((t)=>t.id===studioTask[1] && t.userId===user.id); return task ? send(res,200,{task: publicTask(task)}) : send(res,404,{error:'任务不存在。'}); }
   if (req.method === 'POST' && pathName === '/api/v1/points/redeem') {
