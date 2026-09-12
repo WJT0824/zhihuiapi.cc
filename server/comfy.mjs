@@ -359,11 +359,15 @@ export function applyComfyBindings(workflow, bindings, values = {}) {
     scale: values.scale ?? '',
     width: values.width ?? '',
     height: values.height ?? '',
+    left: values.left ?? 0,
+    top: values.top ?? 0,
+    right: values.right ?? 0,
+    bottom: values.bottom ?? 0,
     seed: values.seed ?? '',
     model: values.model ?? '',
     upscale_model: values.upscaleModel ?? '',
   };
-  const numericTokens = new Set(['scale', 'width', 'height', 'seed']);
+  const numericTokens = new Set(['scale', 'width', 'height', 'left', 'top', 'right', 'bottom', 'seed']);
   const substitute = (value) => {
     const whole = /^\{\{\s*([a-z0-9_]+)\s*\}\}$/i.exec(value);
     if (whole) {
@@ -551,4 +555,3 @@ export function detectPresetKind(parsed, requestedKind) {
   if (kind === 'upscale' || kind === 'vectorize' || kind === 'custom') return kind;
   return parsed.kind;
 }
-

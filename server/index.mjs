@@ -22,6 +22,12 @@ const REF_DIR = path.join(DATA_DIR, 'references');
 const DOWNLOAD_DIR = path.join(DATA_DIR, 'downloads');
 const PLUGIN_FILENAME = '郅绘CDR插件ai版-v1.4.0.exe';
 const RECHARGE_CODE_PREFIX = 'ZHRC1';
+const RECHARGE_SHORT_PREFIX = 'ZHS1';
+const RECHARGE_SHORT_CODE_PREFIX = 'ZHRC1.';
+const RECHARGE_SHORT_CODE_LENGTH = 24;
+const RECHARGE_SHORT_SECRET = 'ZHCDR-SHORT-2026-9F3A7C21B5D8E6';
+const RECHARGE_SHORT_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+const RECHARGE_SHORT_POINTS = [100, 200, 300, 500, 1000, 2000];
 const RECHARGE_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAziIuFwOLkYPZE7YI2dL7fwlDzsRRFANWlvOosrPfCnY=
 -----END PUBLIC KEY-----`;
@@ -312,6 +318,10 @@ async function executeComfyWorkflow(job, preset, user, referenceIds, options = {
     scale: Number(options.scale || preset.scale || 1) || 1,
     width: Number(options.width || dims.width),
     height: Number(options.height || dims.height),
+    left: Number(options.left || 0) || 0,
+    right: Number(options.right || 0) || 0,
+    top: Number(options.top || 0) || 0,
+    bottom: Number(options.bottom || 0) || 0,
     seed: options.seed === undefined ? Math.floor(Math.random() * 1e14) : options.seed,
     upscaleModel,
   });
@@ -489,10 +499,62 @@ const verifyPluginRechargeCode = (code, user) => {
   if (Number.isNaN(Date.parse(payload.expiresAt)) || new Date(payload.expiresAt).getTime() < Date.now()) throw new Error('积分访问码已过期，请联系管理员重新发放。');
   return payload;
 };
+const shortRechargeSignature = (payload) => {
+  const digest = crypto.createHmac('sha256', RECHARGE_SHORT_SECRET).update(String(payload || '')).digest();
+  let bits = 0;
+  let buffer = 0;
+  let output = '';
+  for (const byte of digest) {
+    buffer = (buffer << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      output += RECHARGE_SHORT_ALPHABET[(buffer >> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) output += RECHARGE_SHORT_ALPHABET[(buffer << (5 - bits)) & 31];
+  return output.slice(0, 10);
+};
+const verifyShortRechargeCode = (code) => {
+  const value = String(code || '').trim().toUpperCase();
+  let payload = '';
+  let signature = '';
+  if (value.startsWith(RECHARGE_SHORT_CODE_PREFIX) && value.length === RECHARGE_SHORT_CODE_LENGTH) {
+    payload = value.slice(RECHARGE_SHORT_CODE_PREFIX.length, RECHARGE_SHORT_CODE_PREFIX.length + 8);
+    signature = value.slice(RECHARGE_SHORT_CODE_PREFIX.length + 8);
+  } else if (value.startsWith(RECHARGE_SHORT_PREFIX) && value.length === 23) {
+    payload = value.slice(4, 13);
+    signature = value.slice(13);
+  } else {
+    return null;
+  }
+  const index = RECHARGE_SHORT_ALPHABET.indexOf(payload[0]);
+  if (index < 0 || index >= RECHARGE_SHORT_POINTS.length) return null;
+  if (shortRechargeSignature(payload) !== signature) return null;
+  return { points: RECHARGE_SHORT_POINTS[index], nonce: payload.slice(1) };
+};
 async function redeemRechargeCode(user, rawCode) {
   const code = String(rawCode || '').trim();
   if (!code) throw Object.assign(new Error('请输入积分访问码。'), { status: 400 });
-  if (code.toUpperCase().startsWith(`${RECHARGE_CODE_PREFIX}.`)) {
+  const upperCode = code.toUpperCase();
+  const shortCode = upperCode.startsWith(RECHARGE_SHORT_PREFIX) || upperCode.startsWith(RECHARGE_SHORT_CODE_PREFIX)
+    ? verifyShortRechargeCode(code)
+    : null;
+  if (shortCode) {
+    const payload = shortCode;
+    if (store.rechargeNonces.some((item) => item.nonce === payload.nonce)) throw Object.assign(new Error('该积分访问码已使用。'), { status: 409 });
+    const points = Number(payload.points);
+    user.points += points;
+    store.rechargeNonces.push({ nonce: payload.nonce, userId: user.id, points, amountCny: points / 10, redeemedAt: now() });
+    store.redemptions.push({ id: uid(), code: upperCode.startsWith(RECHARGE_SHORT_CODE_PREFIX) ? 'ZHRC1-S' : 'ZHS1', userId: user.id, points, createdAt: now() });
+    store.ledger.push({ id: uid(), userId: user.id, type: 'redeem', points, createdAt: now() });
+    await persist();
+    return { points: user.points, credited: points, balance: user.points };
+  }
+  const looksLikeShortCode = (upperCode.startsWith(RECHARGE_SHORT_PREFIX) && upperCode.length === 23)
+    || (upperCode.startsWith(RECHARGE_SHORT_CODE_PREFIX) && upperCode.length === RECHARGE_SHORT_CODE_LENGTH);
+  if (looksLikeShortCode) throw Object.assign(new Error('积分访问码校验失败，请确认复制完整。'), { status: 400 });
+  if (upperCode.startsWith(`${RECHARGE_CODE_PREFIX}.`)) {
     const payload = verifyPluginRechargeCode(code, user);
     if (store.rechargeNonces.some((item) => item.nonce === payload.nonce)) throw Object.assign(new Error('该积分访问码已使用。'), { status: 409 });
     const points = Number(payload.points);
@@ -556,8 +618,8 @@ function parseMultipart(raw, contentType) {
     if (next < 0) break;
     let data = raw.subarray(bodyStart, next);
     if (data.length > 1 && data.subarray(data.length - 2).toString() === '\r\n') data = data.subarray(0, data.length - 2);
-    const nameMatch = headers.match(/name="([^"]*)"/i);
-    const fileMatch = headers.match(/filename="([^"]*)"/i);
+    const nameMatch = headers.match(/name\s*=\s*"?([^";\r\n]+)"?/i);
+    const fileMatch = headers.match(/filename\s*=\s*"?([^";\r\n]+)"?/i);
     const typeMatch = headers.match(/content-type:\s*([^\r\n]+)/i);
     if (nameMatch) parts.push({ name: nameMatch[1], filename: fileMatch ? fileMatch[1] : '', type: typeMatch ? typeMatch[1].trim() : 'application/octet-stream', data });
     cursor = next;
@@ -924,6 +986,10 @@ async function gateway(req, res, pathName) {
       scale: body.scale,
       width: body.width,
       height: body.height,
+      left: body.left,
+      right: body.right,
+      top: body.top,
+      bottom: body.bottom,
       seed: body.seed,
       upscaleModel: body.upscale_model || body.upscaleModel,
     }).catch(async (error) => {
