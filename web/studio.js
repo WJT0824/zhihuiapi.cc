@@ -496,6 +496,8 @@ async function adminPage() {
   try { const list = await api('/v1/admin/comfy/workflows'); comfyPresets = list.workflows || []; } catch {}
   let rechargeKeyConfigured = false;
   try { const keyInfo = await api('/v1/admin/recharge-key'); rechargeKeyConfigured = Boolean(keyInfo.configured); } catch {}
+  let shortCodeStatus = {};
+  try { const sc = await api('/v1/admin/short-code'); shortCodeStatus = sc.status || {}; } catch {}
   const stats = d.stats || {};
   const userRows = (d.users || []).slice(-12).reverse().map((u) => `<tr><td>${esc(u.nickname || u.email || u.username || '')}</td><td>${esc(u.email || '')}</td><td>${u.role}</td><td>${money(u.points ?? u.credits)}</td><td>${new Date(u.createdAt).toLocaleString('zh-CN')}</td></tr>`).join('');
   const jobRows = (d.jobs || []).slice(0, 12).map((j) => `<tr><td>${esc(j.prompt || (j.requestId || '').slice(0, 12))}</td><td>${taskStatusLabel(j)}</td><td>${esc(j.model || '')}</td><td>${j.cost ?? ''}</td><td>${new Date(j.createdAt).toLocaleString('zh-CN')}</td></tr>`).join('');
@@ -504,6 +506,16 @@ async function adminPage() {
     <div class="stats">${Object.entries({ 用户: stats.users, 任务: stats.jobs, 积分总量: stats.credits, 成功任务: stats.succeeded }).map(([k, v]) => `<div class="stat"><b>${v ?? 0}</b><span>${k}</span></div>`).join('')}</div>
     <div class="panel-card"><h3 style="margin-bottom:14px">生成充值码</h3><form id="admin-code-form" style="display:flex;gap:10px;flex-wrap:wrap"><input class="input" name="amount" type="number" min="1" placeholder="单码积分" style="width:130px" value="100"><input class="input" name="count" type="number" min="1" placeholder="数量" style="width:100px" value="1"><button class="btn primary">生成</button><p id="code-result" style="width:100%;font-size:12px;color:#09835e;white-space:pre-wrap"></p></form></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">积分码签名私钥（与插件互通）</h3><form id="recharge-key-form"><label class="field"><span>Ed25519 私钥（PEM）</span><textarea class="input" name="privateKey" style="min-height:110px" placeholder="-----BEGIN PRIVATE KEY-----"></textarea></label><button class="btn primary" type="submit">导入并启用插件格式积分码</button><p id="recharge-key-result" style="font-size:12px;color:#09835e">${rechargeKeyConfigured ? '当前已配置签名私钥，生成的积分码为插件通用格式。' : '当前未配置签名私钥；生成的是网站专用 ZH- 兑换码。导入私钥后，网站生成的兑换码即可在插件中使用。'}</p></form></div>
+    <div class="panel-card"><h3 style="margin-bottom:14px">短码密钥（ZHRC1. / ZHS1）</h3>
+      <p style="font-size:12px;color:#5f6b83;margin:0 0 12px">当前主密钥 <b>${esc(shortCodeStatus.primaryPreview || '未配置')}</b>（来源：${esc(shortCodeStatus.source || 'builtin')}）· 可接受 ${shortCodeStatus.acceptedKeys || 1} 个密钥 · 旧版插件兼容：${shortCodeStatus.allowLegacy === false ? '已关闭' : '开启'}${shortCodeStatus.envManaged ? ' · 由环境变量 ZH_RECHARGE_SHORT_SECRET 指定' : ''}</p>
+      <form id="short-code-form"><div class="form-grid"><label class="field"><span>新主密钥（留空保持不变）</span><input class="input" name="primary" placeholder="至少 12 位，建议 32 位随机串"></label><label class="field"><span>旧版插件兼容</span><select class="input" name="allowLegacy"><option value="yes" ${shortCodeStatus.allowLegacy === false ? '' : 'selected'}>开启：旧插件生成的码仍可兑换</option><option value="no" ${shortCodeStatus.allowLegacy === false ? 'selected' : ''}>关闭：只接受新密钥</option></select></label></div>
+      <button class="btn primary" style="margin-top:14px" type="submit">保存密钥设置</button>
+      <p id="short-code-result" style="font-size:12px;color:#09835e;white-space:pre-wrap"></p></form>
+      <form id="short-code-gen-form" style="margin-top:16px;border-top:1px solid rgba(120,140,180,.18);padding-top:14px"><div class="form-grid"><label class="field"><span>积分档位</span><select class="input" name="points">${[100, 200, 300, 500, 1000, 2000].map((p) => `<option value="${p}">${p} 积分</option>`).join('')}</select></label><label class="field"><span>数量</span><input class="input" name="count" type="number" min="1" max="200" value="1"></label></div>
+      <button class="btn primary" style="margin-top:14px">生成短兑换码</button>
+      <p id="short-code-codes" style="font-size:12px;color:#09835e;white-space:pre-wrap"></p></form>
+      <p style="font-size:12px;color:#8a94a8;margin-top:10px">用新主密钥生成的短码，旧插件暂时无法离线生成，但用户在网站兑换都能识别。等插件更新到新密钥后，再把旧版兼容关闭即可彻底停用泄露的旧密钥。</p>
+    </div>
     <div class="panel-card"><h3 style="margin-bottom:14px">AI 图像服务（运行时可切换上游）</h3><form id="ai-config-form"><div class="form-grid"><label class="field"><span>上游中转地址</span><input class="input" name="baseUrl" value="${esc(aiConfig.baseUrl || 'https://tokenflux.cloud/')}" placeholder="支持 https://host、https://host/v1 或完整接口地址"></label><label class="field"><span>生成模型</span><input class="input" name="model" value="${esc(aiConfig.model || 'gpt-image-2')}" placeholder="gpt-image-2"></label></div><label class="field"><span>上游 API Key</span><input class="input" name="apiKey" type="password" placeholder="留空表示不修改当前密钥"></label><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button class="btn primary" type="submit">保存并立即生效</button><button class="btn" type="button" id="ai-config-test">测试并读取模型</button></div><p id="ai-config-result" style="font-size:12px;color:#09835e"></p><p style="font-size:12px;color:#8a94a8;margin-top:8px">切换上游只需填这里并保存，无需重新部署；系统会自动兼容根地址、/v1 和完整接口地址。</p></form></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">工作流上传 / 功能同步</h3><form id="workflow-form"><label class="field"><span>工作流 JSON（可粘贴或上传）</span><textarea class="input" name="workflow" style="min-height:150px" placeholder='{"code":"product-hero","name":"产品主视觉","version":1,...}'></textarea></label><input class="input" type="file" id="workflow-file" accept=".json,application/json" style="margin-top:10px"><button class="btn primary" style="margin-top:14px">上传并发布工作流</button><p id="workflow-result" style="font-size:12px;color:#09835e;white-space:pre-wrap"></p></form></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">ComfyUI 服务（超清放大 / 图转矢量）</h3>
@@ -1110,6 +1122,28 @@ function bindAdmin() {
       toast('工作流已上传，画布已增加对应节点', 'ok');
       setTimeout(() => render(), 900);
     } catch (err) { if (box) box.textContent = '上传失败：' + err.message; toast(err.message, 'error'); }
+  };
+  const shortCodeForm = $('#short-code-form'); if (shortCodeForm) shortCodeForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(shortCodeForm));
+    const box = $('#short-code-result');
+    try {
+      const d = await api('/v1/admin/short-code', { method: 'PUT', body: JSON.stringify({ primary: f.primary, allowLegacy: f.allowLegacy === 'yes' }) });
+      if (box) box.textContent = d.message || '已保存';
+      toast('短码密钥设置已保存', 'ok');
+      setTimeout(() => render(), 900);
+    } catch (err) { if (box) box.textContent = '保存失败：' + err.message; toast(err.message, 'error'); }
+  };
+  const shortCodeGenForm = $('#short-code-gen-form'); if (shortCodeGenForm) shortCodeGenForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(shortCodeGenForm));
+    const box = $('#short-code-codes');
+    if (box) box.textContent = '正在生成…';
+    try {
+      const d = await api('/v1/admin/short-code/generate', { method: 'POST', body: JSON.stringify({ points: Number(f.points), count: Number(f.count) }) });
+      if (box) box.textContent = `已生成 ${d.count} 个 ${d.points} 积分短码：\n` + d.codes.join('\n');
+      toast('短兑换码已生成', 'ok');
+    } catch (err) { if (box) box.textContent = '生成失败：' + err.message; toast(err.message, 'error'); }
   };
   const keyForm = $('#recharge-key-form'); if (keyForm) keyForm.onsubmit = async (e) => {
     e.preventDefault();

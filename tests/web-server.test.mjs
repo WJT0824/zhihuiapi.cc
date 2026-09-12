@@ -5,13 +5,22 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import crypto from 'node:crypto';
 
 const port = 18787;
 const origin = `http://127.0.0.1:${port}`;
 const dataDir = await mkdtemp(path.join(tmpdir(), 'zhihui-test-'));
 const server = spawn(process.execPath, ['server/index.mjs'], {
   cwd: process.cwd(),
-  env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', ZH_DATA_DIR: dataDir, ZH_ADMIN_KEY: 'test-admin-password' },
+  env: {
+    ...process.env,
+    PORT: String(port),
+    HOST: '127.0.0.1',
+    ZH_DATA_DIR: dataDir,
+    ZH_ADMIN_KEY: 'test-admin-password',
+    ZH_RECHARGE_SHORT_SECRET: 'TEST-PRIMARY-SECRET-2026',
+    ZH_RECHARGE_SHORT_SECRET_LEGACY: 'TEST-LEGACY-SECRET-2026',
+  },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 
@@ -221,4 +230,68 @@ test('comfyui workflows auto-configure, run and produce an ultra HD asset', asyn
   } finally {
     await new Promise((resolve) => comfy.close(resolve));
   }
+});
+
+const SHORT_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+
+function buildShortCode(secret, tier) {
+  const digest = crypto.createHmac('sha256', secret).update('').digest();
+  let nonce = '';
+  while (nonce.length < 7) nonce += SHORT_ALPHABET[crypto.randomInt(0, SHORT_ALPHABET.length)];
+  const payload = SHORT_ALPHABET[tier] + nonce;
+  const full = crypto.createHmac('sha256', secret).update(payload).digest();
+  let bits = 0;
+  let buffer = 0;
+  let signature = '';
+  for (const byte of full) {
+    buffer = (buffer << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      signature += SHORT_ALPHABET[(buffer >> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) signature += SHORT_ALPHABET[(buffer << (5 - bits)) & 31];
+  void digest;
+  return `ZHRC1.${payload}${signature.slice(0, 10)}`;
+}
+
+test('plugin short recharge codes keep redeeming after the signing key moves to config', async () => {
+  const email = `short-${Date.now()}@example.com`;
+  const registered = await request('/v1/auth/register', { method: 'POST', body: JSON.stringify({ email, nickname: `短码${Date.now()}`, password: 'testpass123' }) });
+  const authHeader = { authorization: `Bearer ${registered.body.access_token}` };
+  const startBalance = registered.body.user.credits;
+
+  const legacyCode = buildShortCode('TEST-LEGACY-SECRET-2026', 1);
+  const legacy = await request('/v1/redeem', { method: 'POST', headers: authHeader, body: JSON.stringify({ code: legacyCode }) });
+  assert.equal(legacy.status, 200);
+  assert.equal(legacy.body.credited, 200);
+
+  const primaryCode = buildShortCode('TEST-PRIMARY-SECRET-2026', 2);
+  const primary = await request('/v1/redeem', { method: 'POST', headers: authHeader, body: JSON.stringify({ code: primaryCode }) });
+  assert.equal(primary.status, 200);
+  assert.equal(primary.body.credited, 300);
+
+  const repeat = await request('/v1/redeem', { method: 'POST', headers: authHeader, body: JSON.stringify({ code: legacyCode }) });
+  assert.equal(repeat.status, 409);
+
+  const forged = await request('/v1/redeem', { method: 'POST', headers: authHeader, body: JSON.stringify({ code: buildShortCode('NOT-THE-SECRET-2026', 5) }) });
+  assert.equal(forged.status, 400);
+
+  const adminLogin = await request('/v1/auth/login', { method: 'POST', body: JSON.stringify({ nickname: 'admin', password: 'test-admin-password' }) });
+  const adminHeader = { authorization: `Bearer ${adminLogin.body.access_token}` };
+  const status = await request('/v1/admin/short-code', { headers: adminHeader });
+  assert.equal(status.body.status.source, 'env');
+  assert.equal(status.body.status.allowLegacy, true);
+  assert.ok(status.body.status.acceptedKeys >= 2);
+
+  const generated = await request('/v1/admin/short-code/generate', { method: 'POST', headers: adminHeader, body: JSON.stringify({ points: 500, count: 2 }) });
+  assert.equal(generated.status, 201);
+  assert.equal(generated.body.codes.length, 2);
+  const minted = await request('/v1/redeem', { method: 'POST', headers: authHeader, body: JSON.stringify({ code: generated.body.codes[0] }) });
+  assert.equal(minted.status, 200);
+  assert.equal(minted.body.credited, 500);
+
+  const account = await request('/v1/account', { headers: authHeader });
+  assert.equal(account.body.user.credits, startBalance + 200 + 300 + 500);
 });
