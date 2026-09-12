@@ -291,6 +291,48 @@ export function InfiniteCanvas({
     updateViewport({ ...project.graph.viewport, zoom: Number(Math.min(2.4, Math.max(0.18, zoom)).toFixed(2)) });
   }
 
+  // Button and slider zoom animate; pointer-centred wheel zoom stays instant.
+  const [smoothZoom, setSmoothZoom] = useState(false);
+  const smoothZoomTimer = useRef<number>();
+  function setViewportZoomAnimated(zoom: number) {
+    setSmoothZoom(true);
+    if (smoothZoomTimer.current) window.clearTimeout(smoothZoomTimer.current);
+    smoothZoomTimer.current = window.setTimeout(() => setSmoothZoom(false), 280);
+    setViewportZoom(zoom);
+  }
+
+  // Wheel zoom stays anchored to the pointer so the canvas does not drift away
+  // from what the user is pointing at.
+  const viewportRef = useRef(project.graph.viewport);
+  const zoomHandlerRef = useRef<(event: WheelEvent) => void>(() => {});
+  useEffect(() => {
+    viewportRef.current = project.graph.viewport;
+  }, [project.graph.viewport]);
+  zoomHandlerRef.current = (event: WheelEvent) => {
+    event.preventDefault();
+    const element = canvasRef.current;
+    if (!element) return;
+    const viewport = viewportRef.current;
+    const rect = element.getBoundingClientRect();
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    const delta = Math.max(-60, Math.min(60, event.deltaY));
+    const nextZoom = Math.min(2.4, Math.max(0.18, viewport.zoom * Math.exp(-delta * 0.0018)));
+    const ratio = nextZoom / viewport.zoom;
+    updateViewport({
+      x: pointerX - (pointerX - viewport.x) * ratio,
+      y: pointerY - (pointerY - viewport.y) * ratio,
+      zoom: Number(nextZoom.toFixed(3)),
+    });
+  };
+  useEffect(() => {
+    const element = canvasRef.current;
+    if (!element) return;
+    const listener = (event: WheelEvent) => zoomHandlerRef.current(event);
+    element.addEventListener("wheel", listener, { passive: false });
+    return () => element.removeEventListener("wheel", listener);
+  }, []);
+
   function updateNode(node: CanvasNode) {
     const syncedText = node.type === "prompt" ? String(node.params.prompt ?? "") : undefined;
     const sourceEdges = syncedText !== undefined ? project.graph.edges.filter((edge) => edge.sourceNode === node.id) : [];
@@ -810,14 +852,6 @@ export function InfiniteCanvas({
         setContextSubmenu(undefined);
         setContextMenu(toWorld(event.clientX, event.clientY));
       }}
-      onWheel={(event) => {
-        event.preventDefault();
-        setContextMenu(undefined);
-        setContextSubmenu(undefined);
-        setImageMenu(undefined);
-        const nextZoom = Math.min(2.4, Math.max(0.18, project.graph.viewport.zoom - event.deltaY * 0.001));
-        updateViewport({ ...project.graph.viewport, zoom: Number(nextZoom.toFixed(2)) });
-      }}
       onPointerDown={(event) => {
         setContextMenu(undefined);
         setImageMenu(undefined);
@@ -884,7 +918,7 @@ export function InfiniteCanvas({
     >
       <div className="canvas-grid" />
       <div
-        className="canvas-world"
+        className={`canvas-world${smoothZoom ? " world-zoom-animating" : ""}`}
         style={{
           transform: `translate(${project.graph.viewport.x}px, ${project.graph.viewport.y}px) scale(${project.graph.viewport.zoom})`,
         }}
@@ -1040,7 +1074,7 @@ export function InfiniteCanvas({
           max={240}
           value={Math.round(project.graph.viewport.zoom * 100)}
           onPointerDown={(event) => event.stopPropagation()}
-          onChange={(event) => setViewportZoom(Number(event.target.value) / 100)}
+          onChange={(event) => setViewportZoomAnimated(Number(event.target.value) / 100)}
           title="缩放画布"
         />
         <span>{Math.round(project.graph.viewport.zoom * 100)}%</span>

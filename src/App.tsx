@@ -349,6 +349,10 @@ export function App() {
           : await window.zhihui.auth.login({ nickname: authForm.nickname, password: authForm.password });
       setUser(nextUser);
       await refreshWallet();
+      void window.zhihui.ai
+        .listWorkflows?.()
+        .then((library) => setWorkflowPresets(library?.workflows || []))
+        .catch(() => setWorkflowPresets([]));
       setAuthForm({ nickname: "", password: "" });
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : String(error));
@@ -360,6 +364,7 @@ export function App() {
     setUser(undefined);
     setWallet(undefined);
     setLedger([]);
+    setWorkflowPresets([]);
     setAuthMode("login");
   }
 

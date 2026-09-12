@@ -147,5 +147,70 @@ textarea.input{min-height:92px;resize:vertical;line-height:1.6}
 .toolbar-spacer{flex:1}
 .zoom-group{display:flex;align-items:center;gap:4px}
 .mobile-nav{display:none}
+
+/* ------------------------------------------------------------------
+   交互与视觉打磨：过渡、入场动效、悬停反馈与滚动条
+   ------------------------------------------------------------------ */
+@keyframes zh-rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes zh-fade{from{opacity:0}to{opacity:1}}
+@keyframes zh-pop{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+
+body{--zh-ease:cubic-bezier(.22,1,.36,1);--zh-quick:140ms;--zh-base:240ms}
+
+/* 页面与卡片按顺序轻微浮现，切换栏目时不再“硬切” */
+.panel-page .panel-card,
+.panel-page .stats,
+.workspace-tools+.panel-card{animation:zh-rise var(--zh-base) var(--zh-ease) both}
+.panel-page .panel-card:nth-child(2){animation-delay:40ms}
+.panel-page .panel-card:nth-child(3){animation-delay:80ms}
+.panel-page .panel-card:nth-child(4){animation-delay:120ms}
+.panel-page .panel-card:nth-child(5){animation-delay:160ms}
+.landing{animation:zh-fade 320ms var(--zh-ease) both}
+
+.panel-card{transition:box-shadow var(--zh-base) var(--zh-ease),border-color var(--zh-base) var(--zh-ease),transform var(--zh-quick) var(--zh-ease)}
+.panel-card:hover{border-color:#d5ddf5;box-shadow:0 22px 52px rgba(30,45,90,.13)}
+
+/* 按钮：按下有即时回馈，悬停有轻微抬升 */
+.btn,.iconbtn,.account-chip,.palette-item,.task-card,.side-user,.quick-nav a,.topnav a,.cat-chip{transition:background-color var(--zh-quick) var(--zh-ease),border-color var(--zh-quick) var(--zh-ease),color var(--zh-quick) var(--zh-ease),box-shadow var(--zh-quick) var(--zh-ease),transform var(--zh-quick) var(--zh-ease)}
+.btn:active,.iconbtn:active,.palette-item:active,.cat-chip:active{transform:translateY(0) scale(.98)}
+.btn.primary:hover{box-shadow:0 12px 28px rgba(79,93,250,.32);transform:translateY(-1px)}
+.iconbtn:hover{border-color:#c6cef5;background:#f8f9ff;transform:translateY(-1px)}
+
+/* 表格与任务卡片 */
+.table tbody tr{transition:background-color var(--zh-quick) var(--zh-ease)}
+.table tbody tr:hover{background:#f8faff}
+.task-card:hover{border-color:#cdd6f7;box-shadow:0 14px 34px rgba(30,45,90,.1);transform:translateY(-1px)}
+.task-card img,.task-card video{transition:transform var(--zh-base) var(--zh-ease)}
+.task-card:hover img,.task-card:hover video{transform:scale(1.03)}
+
+/* 统计卡 */
+.stat{transition:transform var(--zh-quick) var(--zh-ease),box-shadow var(--zh-quick) var(--zh-ease)}
+.stat:hover{transform:translateY(-2px);box-shadow:0 16px 34px rgba(30,45,90,.1)}
+
+/* 提示条与弹窗 */
+.toast{box-shadow:0 18px 44px rgba(20,30,60,.28);backdrop-filter:blur(10px)}
+.toast.show{animation:zh-pop 220ms var(--zh-ease)}
+.modal{animation:zh-fade 160ms var(--zh-ease)}
+.modal.open .modal-card{animation:zh-pop 220ms var(--zh-ease)}
+
+/* 登录与注册 */
+.auth-card{animation:zh-pop 280ms var(--zh-ease)}
+
+/* 输入控件聚焦更柔和 */
+.input,textarea.input,select.input{transition:border-color var(--zh-quick) var(--zh-ease),box-shadow var(--zh-quick) var(--zh-ease),background-color var(--zh-quick) var(--zh-ease)}
+
+/* 滚动条更细更轻 */
+.panel-page,.rail,.modal-card,.table-wrap{scrollbar-width:thin;scrollbar-color:#c9d3e6 transparent}
+.panel-page::-webkit-scrollbar,.rail::-webkit-scrollbar,.modal-card::-webkit-scrollbar{width:10px;height:10px}
+.panel-page::-webkit-scrollbar-thumb,.rail::-webkit-scrollbar-thumb,.modal-card::-webkit-scrollbar-thumb{background:#ccd6ea;border:3px solid transparent;border-radius:999px;background-clip:content-box}
+.panel-page::-webkit-scrollbar-thumb:hover,.rail::-webkit-scrollbar-thumb:hover{background:#b3c0dd;background-clip:content-box}
+
+/* 键盘可访问性 */
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid rgba(79,93,250,.7);outline-offset:2px;border-radius:10px}
+
+@media(prefers-reduced-motion:reduce){
+  .panel-page .panel-card,.panel-page .stats,.landing,.auth-card,.toast.show,.modal.open .modal-card{animation:none}
+  .btn,.iconbtn,.panel-card,.task-card,.stat,.palette-item{transition:none}
+}
 @media(max-width:1080px){.workbench{grid-template-columns:190px minmax(0,1fr)}.inspector{position:fixed;right:0;top:64px;bottom:0;width:min(340px,86vw);z-index:80;transform:translateX(105%);transition:.25s;box-shadow:-20px 0 60px rgba(20,30,60,.14)}.inspector.open{transform:none}.landing{grid-template-columns:1fr}.landing-stage{display:none}}
 @media(max-width:760px){.workbench{grid-template-columns:1fr}.rail{display:none}.topnav a span{display:none}.topnav a{padding:8px 10px}.topnav a.active::after{content:"✓"}.canvas-wrap{min-height:70vh}.stats{grid-template-columns:repeat(2,1fr)}.landing-copy{padding:42px 24px}.feature-row{grid-template-columns:1fr}.topbar{gap:8px;padding:0 12px}.account-chip .name{display:none}.mobile-nav{display:flex}}

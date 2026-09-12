@@ -2392,3 +2392,254 @@ textarea:focus {
   -webkit-box-orient:vertical;
   overflow:hidden;
 }
+
+/* ------------------------------------------------------------------
+   交互与视觉打磨：动效、悬停反馈、聚焦环与滚动条
+   统一使用品牌蓝紫作为选中强调色，保留琥珀色表示运行中。
+   ------------------------------------------------------------------ */
+:root {
+  --zh-accent: #4f5dfa;
+  --zh-accent-2: #7c8cff;
+  --zh-accent-soft: rgba(79, 93, 250, 0.16);
+  --zh-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --zh-quick: 140ms;
+  --zh-base: 220ms;
+}
+
+@keyframes zh-menu-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes zh-panel-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes zh-node-breathe {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(246, 198, 89, 0.34), 0 18px 38px rgba(0, 0, 0, 0.34); }
+  50% { box-shadow: 0 0 0 1px rgba(246, 198, 89, 0.62), 0 0 26px rgba(246, 198, 89, 0.22), 0 18px 38px rgba(0, 0, 0, 0.34); }
+}
+
+@keyframes zh-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 画布世界：按钮与滑块缩放时平滑过渡，滚轮缩放保持即时跟手 */
+.canvas-world {
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.canvas-world.world-zoom-animating {
+  transition: transform 260ms var(--zh-ease);
+}
+
+/* 节点：悬停与选中反馈 */
+.canvas-node {
+  transition:
+    border-color var(--zh-base) var(--zh-ease),
+    box-shadow var(--zh-base) var(--zh-ease),
+    background-color var(--zh-base) var(--zh-ease);
+}
+
+.canvas-node:hover {
+  border-color: rgba(124, 140, 255, 0.52);
+}
+
+.canvas-node.selected {
+  border-color: rgba(124, 140, 255, 0.86);
+  box-shadow:
+    0 0 0 1px rgba(124, 140, 255, 0.55),
+    0 0 26px rgba(79, 93, 250, 0.22),
+    0 18px 38px rgba(0, 0, 0, 0.36);
+  animation: zh-panel-in 200ms var(--zh-ease);
+}
+
+.canvas-node.running {
+  border-color: rgba(246, 198, 89, 0.78);
+  animation: zh-node-breathe 2.1s ease-in-out infinite;
+}
+
+.canvas-node.failed {
+  border-color: rgba(240, 120, 162, 0.78);
+}
+
+/* 连接点：悬停放大并给出明确的可用反馈 */
+.node-port {
+  transition:
+    opacity var(--zh-quick) var(--zh-ease),
+    background-color var(--zh-quick) var(--zh-ease),
+    border-color var(--zh-quick) var(--zh-ease),
+    box-shadow var(--zh-quick) var(--zh-ease),
+    transform var(--zh-quick) var(--zh-ease);
+  box-shadow: 0 0 0 3px rgba(15, 18, 24, 0.96), inset 0 0 0 3px var(--zh-accent-soft);
+}
+
+.node-port:hover,
+.node-port:focus-visible {
+  transform: translateY(-50%) scale(1.22);
+}
+
+.canvas-node:hover .node-port {
+  opacity: 0.92;
+}
+
+/* 节点头部操作按钮 */
+.node-header-action {
+  transition:
+    border-color var(--zh-quick) var(--zh-ease),
+    background-color var(--zh-quick) var(--zh-ease),
+    color var(--zh-quick) var(--zh-ease),
+    transform var(--zh-quick) var(--zh-ease);
+}
+
+.node-header-action:hover {
+  border-color: rgba(124, 140, 255, 0.62);
+  background: rgba(79, 93, 250, 0.14);
+}
+
+.node-header-action:active {
+  transform: scale(0.97);
+}
+
+/* 右键菜单与子菜单入场 */
+.canvas-context-menu {
+  animation: zh-menu-in var(--zh-quick) var(--zh-ease);
+  backdrop-filter: blur(12px);
+}
+
+.canvas-context-menu button {
+  transition:
+    background-color var(--zh-quick) var(--zh-ease),
+    padding-left var(--zh-quick) var(--zh-ease),
+    color var(--zh-quick) var(--zh-ease);
+}
+
+.canvas-context-menu button:hover {
+  padding-left: 16px;
+}
+
+/* 侧栏、检查器与工具条 */
+.side-rail button,
+.sidebar-panel button,
+.inspector-form button,
+.toolbar button {
+  transition:
+    background-color var(--zh-quick) var(--zh-ease),
+    border-color var(--zh-quick) var(--zh-ease),
+    color var(--zh-quick) var(--zh-ease),
+    transform var(--zh-quick) var(--zh-ease);
+}
+
+.side-rail button:hover,
+.toolbar button:hover {
+  transform: translateY(-1px);
+}
+
+.side-rail button:active,
+.toolbar button:active,
+.sidebar-panel button:active,
+.inspector-form button:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* 表单控件 */
+.inspector-form input,
+.inspector-form select,
+.inspector-form textarea,
+.sidebar-panel input,
+.sidebar-panel textarea {
+  transition:
+    border-color var(--zh-quick) var(--zh-ease),
+    box-shadow var(--zh-quick) var(--zh-ease),
+    background-color var(--zh-quick) var(--zh-ease);
+}
+
+/* 弹窗 */
+.modal-backdrop,
+.image-viewer {
+  animation: zh-fade-in 160ms var(--zh-ease);
+}
+
+.settings-modal,
+.wallet-modal {
+  animation: zh-panel-in 200ms var(--zh-ease);
+}
+
+/* 画布视口与网格 */
+.canvas-viewport {
+  transition: background-color var(--zh-base) var(--zh-ease);
+}
+
+.canvas-grid {
+  transition: opacity var(--zh-base) var(--zh-ease);
+}
+
+.canvas-marquee {
+  background: rgba(79, 93, 250, 0.14);
+  border-color: rgba(124, 140, 255, 0.72);
+  box-shadow: 0 0 0 1px rgba(124, 140, 255, 0.25) inset;
+}
+
+/* 滚动条 */
+.sidebar-panel,
+.inspector,
+.settings-modal,
+.wallet-modal,
+.modal-backdrop {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(140, 155, 180, 0.42) transparent;
+}
+
+.sidebar-panel::-webkit-scrollbar,
+.inspector::-webkit-scrollbar,
+.settings-modal::-webkit-scrollbar,
+.wallet-modal::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+.sidebar-panel::-webkit-scrollbar-thumb,
+.inspector::-webkit-scrollbar-thumb,
+.settings-modal::-webkit-scrollbar-thumb,
+.wallet-modal::-webkit-scrollbar-thumb {
+  background: rgba(140, 155, 180, 0.36);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+.sidebar-panel::-webkit-scrollbar-thumb:hover,
+.inspector::-webkit-scrollbar-thumb:hover {
+  background: rgba(140, 155, 180, 0.6);
+  background-clip: content-box;
+}
+
+/* 可访问性：键盘聚焦环 */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid rgba(124, 140, 255, 0.85);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canvas-world.world-zoom-animating {
+    transition: none;
+  }
+  .canvas-node.running {
+    animation: none;
+  }
+  .canvas-context-menu,
+  .canvas-node.selected,
+  .settings-modal,
+  .wallet-modal,
+  .modal-backdrop,
+  .image-viewer {
+    animation: none;
+  }
+}
