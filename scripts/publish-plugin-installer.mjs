@@ -36,7 +36,10 @@ try {
 }
 if (!stats.isFile()) fail(`不是文件：${absolute}`);
 const assetName = readOption("name", DEFAULT_ASSET_NAME);
-const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+// Local date, not UTC: a 01:00 Beijing publish is still the previous day in UTC.
+const local = new Date();
+const displayDate = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, "0")}-${String(local.getDate()).padStart(2, "0")}`;
+const stamp = displayDate.replace(/-/g, "");
 const tag = readOption("tag", `plugin-v1.4.0-ai-${stamp}`);
 
 function githubToken() {
@@ -127,18 +130,21 @@ await json(
 
 const downloadUrl = `https://github.com/${OWNER}/${REPO}/releases/download/${tag}/${encodeURIComponent(assetName)}`;
 const page = readFileSync(DOWNLOAD_PAGE, "utf8");
-const linkPattern = /https:\/\/github\.com\/[^"]+\/releases\/download\/[^"]+/g;
+// The page links to releases/latest so every future release is picked up
+// without another deploy; only the "last updated" label changes here.
+const linkPattern = /https:\/\/github\.com\/[^"]+\/releases\/(?:latest\/download|download\/[^/]+)\/[^"]+/g;
 if (!linkPattern.test(page)) fail(`没有在 ${DOWNLOAD_PAGE} 找到下载链接，请手动更新。`);
 linkPattern.lastIndex = 0;
+const latestUrl = `https://github.com/${OWNER}/${REPO}/releases/latest/download/${encodeURIComponent(assetName)}`;
 const nextPage = page
-  .replace(linkPattern, downloadUrl)
-  .replace(/完整安装包（[^）]*）/g, `完整安装包（${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)} 更新）`);
+  .replace(linkPattern, latestUrl)
+  .replace(/完整安装包（[^）]*）/g, `完整安装包（${displayDate} 更新）`);
 writeFileSync(DOWNLOAD_PAGE, nextPage, "utf8");
 
 console.log("");
 console.log(`下载页已更新：${path.relative(process.cwd(), DOWNLOAD_PAGE)}`);
-console.log(`新下载地址：${downloadUrl}`);
+console.log(`本次发布地址：${downloadUrl}`);
+console.log(`下载页使用的固定地址：${latestUrl}`);
 console.log("接下来执行：");
 console.log("  npm run build:web");
 console.log('  git add web/downloads/index.html && git commit -m "chore: update plugin installer" && git push origin main');
-
