@@ -539,7 +539,8 @@ const publicPluginConfig = () => {
     editModel: ai.model || 'gpt-image-2',
     pointsPerGeneration: 3,
     workflowsUrl: `${(PUBLIC_API_ORIGIN || 'https://zhihuiapicc-production.up.railway.app').replace(/\/+$/, '')}/v1/studio/workflows/public`,
-    relayOrigin: `${(activeNewapiConfig().baseUrl || 'https://relay.zhihuiapi.cc').replace(/\/+$/, '')}/`,
+    // 运营后台保存中转站地址后这里会自动跟随；默认先指向当前在线的中转服务。
+    relayOrigin: `${(activeNewapiConfig().baseUrl || 'https://new-api-production-fd31.up.railway.app').replace(/\/+$/, '')}/`,
     relayEnabled: publicRelayConfig().configured,
     comfyEnabled: Boolean(comfy.enabled && comfy.baseUrl),
     workflows: listWorkflowPresets().map(publicWorkflowPreset),
