@@ -17,8 +17,9 @@ a{color:inherit}
 .brand .logo{width:36px;height:36px;border-radius:10px;object-fit:cover;box-shadow:0 6px 16px rgba(76,92,255,.22);background:#fff}
 .brand small{display:block;font-size:9px;letter-spacing:.22em;color:var(--muted);font-weight:600}
 .topnav i{font-style:normal}
-.topnav{display:flex;gap:4px;flex:1}
-.topnav a{padding:8px 13px;border-radius:9px;color:#59657f;text-decoration:none;font-weight:600;font-size:13.5px;transition:.16s}
+.topnav{display:flex;gap:4px;flex:1;min-width:0;overflow-x:auto;scrollbar-width:none}
+.topnav::-webkit-scrollbar{display:none}
+.topnav a{padding:8px 13px;border-radius:9px;color:#59657f;text-decoration:none;font-weight:600;font-size:13.5px;transition:.16s;white-space:nowrap;flex:0 0 auto}
 .topnav a:hover,.topnav a.active{background:#eef1ff;color:var(--primary)}
 .top-right{margin-left:auto;display:flex;align-items:center;gap:10px}
 .btn{border:1px solid var(--line);background:#fff;border-radius:11px;padding:8px 14px;font-weight:650;transition:.16s;display:inline-flex;align-items:center;gap:7px;justify-content:center;text-decoration:none;white-space:nowrap}
