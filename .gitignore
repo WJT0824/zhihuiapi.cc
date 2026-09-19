@@ -7,6 +7,10 @@ release-*/
 *.blockmap
 *.log
 .env
+deploy/.env
+deploy/data/
+deploy/newapi-data/
+deploy/.admin-key.txt
 .vite/
 data/
 web-dist/

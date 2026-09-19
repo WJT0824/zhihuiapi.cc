@@ -33,7 +33,21 @@ docker run -d --name zhihui-web -p 8787:8787 \
 
 中转层使用自建 new-api（镜像 `calciumion/new-api:latest`），与业务层 Node 服务分开部署。站点保留原有创作台、插件接口、ComfyUI 与视频模型，只把模型转发、账号镜像与额度记账交给 new-api。
 
-### Railway 部署步骤
+### 自有服务器部署（推荐，支持支付宝付款）
+
+Railway 需要绑定外币信用卡，长期方案改用一台香港/新加坡轻量云服务器，
+业务 Node 服务与 new-api 跑在同一台机器，Nginx 统一做 HTTPS 入口。
+完整说明见 [`deploy/README.md`](deploy/README.md)，服务器上执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/WJT0824/zhihuiapi.cc/main/deploy/install.sh -o install.sh
+bash install.sh
+```
+
+脚本会装好 Docker、生成密钥、启动 `docker compose`、配 Nginx 并申请 Let's Encrypt 证书。
+DNS 把 `api` 与 `relay` 两条记录改成指向服务器 IP 的 A 记录即可，`@`/`www` 仍留帽子云。
+
+### Railway 部署步骤（旧方案，需要外币卡）
 
 1. 在项目里新建服务 → Deploy from Docker Image → 填入 `calciumion/new-api:latest`。
 2. 给该服务添加持久卷，挂载路径 `/data`（SQLite 数据文件存放处，必须挂载否则重启丢数据）。
