@@ -27,11 +27,36 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq ca-certificates curl git nginx openssl
 if ! command -v docker >/dev/null 2>&1; then
-  curl -fsSL https://get.docker.com | sh
+  # 中国大陆机器访问 get.docker.com 经常被重置，改用阿里云镜像源
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL --retry 3 --connect-timeout 15 \
+    https://mirrors.aliyun.com/docker-ce/linux/ubuntu/gpg \
+    | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  chmod a+r /etc/apt/keyrings/docker.gpg
+  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.gpg] https://mirrors.aliyun.com/docker-ce/linux/ubuntu %s stable\n' \
+    "$(dpkg --print-architecture)" "$(. /etc/os-release && echo "$VERSION_CODENAME")" \
+    > /etc/apt/sources.list.d/docker.list
+  apt-get update -qq
+  apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
 systemctl enable --now docker >/dev/null 2>&1 || true
 if ! docker compose version >/dev/null 2>&1; then
   apt-get install -y -qq docker-compose-plugin
+fi
+# 国内拉取 Docker Hub 镜像需要加速器
+if [ ! -f /etc/docker/daemon.json ]; then
+  mkdir -p /etc/docker
+  cat > /etc/docker/daemon.json <<'JSON'
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io",
+    "https://docker.1ms.run",
+    "https://docker.1panel.live",
+    "https://hub.rat.dev"
+  ]
+}
+JSON
+  systemctl restart docker
 fi
 
 log "2/7 准备项目目录 ${APP_DIR}"
@@ -107,7 +132,7 @@ else
 fi
 
 IP="$(curl -fsS -m 10 https://api.ipify.org 2>/dev/null || printf '本机IP')"
-printf '\n------------------------------------------------------------------\n'
+printf '%s\n' '' '------------------------------------------------------------------'
 printf '部署完成\n\n'
 printf '  业务接口   https://%s/api/health   （内网 127.0.0.1:8787）\n' "${API_DOMAIN}"
 printf '  中转站     https://%s/api/status （内网 127.0.0.1:3000）\n' "${RELAY_DOMAIN}"

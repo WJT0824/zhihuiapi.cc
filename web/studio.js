@@ -1,5 +1,5 @@
 const APP = document.querySelector('#app');
-const API_ORIGIN = ['localhost', '127.0.0.1'].includes(location.hostname) ? location.origin : 'https://zhihuiapicc-production.up.railway.app';
+const API_ORIGIN = ['localhost', '127.0.0.1'].includes(location.hostname) ? location.origin : 'https://api.zhihuiapi.cc';
 const state = {
   token: localStorage.getItem('zh_token') || '',
   user: JSON.parse(localStorage.getItem('zh_user') || 'null'),

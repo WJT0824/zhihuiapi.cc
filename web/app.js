@@ -1,6 +1,6 @@
 const app = document.querySelector('#app');
 const state = { token: localStorage.getItem('zh_token') || '', user: JSON.parse(localStorage.getItem('zh_user') || 'null'), page: location.hash.slice(1) || 'home', mode: 'login', tasks: [] };
-const API_ORIGIN = 'https://zhihuiapicc-production.up.railway.app';
+const API_ORIGIN = 'https://api.zhihuiapi.cc';
 const esc = (s) => String(s || '').replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; });
 async function api(url, options){ options = options || {}; const target = url.indexOf('://') > -1 ? url : API_ORIGIN + url; const headers = Object.assign({'content-type':'application/json'}, state.token ? {authorization:'Bearer '+state.token} : {}, options.headers || {}); const res = await fetch(target, Object.assign({}, options, {headers})); const raw = await res.text(); let data; try{data=raw?JSON.parse(raw):{};}catch(e){throw new TypeError('API 服务暂不可用');} if(!res.ok) throw new Error(data.error || '请求失败'); return data; }
 function localAccounts(){ try{return JSON.parse(localStorage.getItem('zh_accounts')||'{}');}catch(e){return {};} }
