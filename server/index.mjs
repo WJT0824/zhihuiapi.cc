@@ -588,8 +588,25 @@ const modelSourceKey = (config) => hash(JSON.stringify([normalizeUpstreamBase(co
 const readUpstreamModels = async (baseUrl, apiKey) => {
   const results = await Promise.allSettled(['models', 'images/models'].map(async (resource) => {
     const response = await fetchUpstream(baseUrl, resource, { headers: upstreamAuthHeaders(apiKey), signal: AbortSignal.timeout(12000) });
-    if (!response.ok) throw new Error(`模型接口返回 HTTP ${response.status}`);
-    const payload = await response.json();
+    const endpoint = response.url || upstreamUrls(baseUrl, resource)[0];
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        throw new Error(`鉴权失败（HTTP ${response.status}）：${endpoint} 拒绝了当前 API Key，请核对中转站令牌是否属于这个地址。`);
+      }
+      throw new Error(`模型接口返回 HTTP ${response.status}：${endpoint}`);
+    }
+    // 官网首页/静态站对任意路径都返回 200 + HTML，直接 .json() 只会抛出难懂的解析错误
+    const contentType = String(response.headers.get('content-type') || '');
+    const text = await response.text();
+    if (!/json/i.test(contentType) && !/^\s*[[{]/.test(text)) {
+      throw new Error(`上游返回的是网页而不是 JSON：${endpoint}。请确认填的是中转站接入地址（例如 https://relay.zhihuiapi.cc），而不是官网首页。`);
+    }
+    let payload;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new Error(`上游返回内容无法解析为 JSON：${endpoint}`);
+    }
     return modelsFromPayload(payload).map((model) => resource === 'images/models'
       ? { ...model, tags: ['text-to-image', 'image-editing'] } : model);
   }));
