@@ -539,7 +539,7 @@ const publicPluginConfig = () => {
     editModel: ai.model || 'gpt-image-2',
     pointsPerGeneration: 3,
     workflowsUrl: `${(PUBLIC_API_ORIGIN || 'https://zhihuiapicc-production.up.railway.app').replace(/\/+$/, '')}/v1/studio/workflows/public`,
-    relayOrigin: `${(activeNewapiConfig().baseUrl || 'https://api.zhihuiapi.cc').replace(/\/+$/, '')}/`,
+    relayOrigin: `${(activeNewapiConfig().baseUrl || 'https://relay.zhihuiapi.cc').replace(/\/+$/, '')}/`,
     relayEnabled: publicRelayConfig().configured,
     comfyEnabled: Boolean(comfy.enabled && comfy.baseUrl),
     workflows: listWorkflowPresets().map(publicWorkflowPreset),

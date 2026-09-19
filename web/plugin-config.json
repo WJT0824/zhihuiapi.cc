@@ -7,7 +7,7 @@
   "editModel": "gpt-image-2",
   "pointsPerGeneration": 3,
   "workflowsUrl": "https://zhihuiapicc-production.up.railway.app/v1/studio/workflows/public",
-  "relayOrigin": "https://api.zhihuiapi.cc/",
+  "relayOrigin": "https://relay.zhihuiapi.cc/",
   "comfyEnabled": false,
   "workflows": [
     {
