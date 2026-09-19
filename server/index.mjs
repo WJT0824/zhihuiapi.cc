@@ -612,6 +612,11 @@ const readUpstreamModels = async (baseUrl, apiKey) => {
   }));
   const models = mergeGatewayModelLists(...results.filter((r) => r.status === 'fulfilled').map((r) => r.value));
   if (models.length) return models;
+  // 有的上游能连上但一个模型都不给（例如令牌所属分组下没有可用渠道），
+  // 这时不该把备用路径的报错抛出去，而要直接说清楚过滤原因。
+  if (results.some((r) => r.status === 'fulfilled')) {
+    throw new Error(`${normalizeUpstreamBase(baseUrl)}/v1/models 请求成功但返回 0 个模型：通常是该令牌所属分组下没有可用渠道，或令牌没有模型权限。请到中转站把令牌分组改成有渠道的分组（例如 default），或在令牌里放开模型权限。`);
+  }
   const failed = results.find((r) => r.status === 'rejected');
   throw failed?.reason || new Error('连接成功，但上游没有返回模型列表。');
 };
