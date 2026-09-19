@@ -1,79 +1,70 @@
-# 郅绘网站部署
+# 郅绘中转站部署说明
 
-## 直接启动
+> 2026-09-20 起，`zhihuiapi.cc` 已从「郅绘创作台门户」整体切换为 **new-api 中转站**。
+> 创作台、画布、积分体系与 CDR 插件接口同时下线，相关代码保留在本仓库作为历史与备份。
 
-需要 Node.js 22 或更高版本。
+## 现网形态
 
-```bash
-ZH_ADMIN_KEY="请替换为强密码" NODE_ENV=production npm start
-```
+| 项目 | 值 |
+| --- | --- |
+| 站点 | `https://zhihuiapi.cc`（`www` 归一，`relay.` / `api.` 301 到主域名） |
+| 服务器 | 阿里云杭州 `47.114.52.219`，Ubuntu 24.04，2C2G |
+| 应用 | new-api 单容器（`calciumion/new-api:latest`），仅监听 `127.0.0.1:3000` |
+| 入口 | 宿主机 nginx 反向代理，Let's Encrypt 证书由 certbot 自动续期 |
+| 数据 | `/opt/zhihui/deploy/newapi-data/one-api.db`（SQLite，随容器卷持久化） |
+| 部署目录 | `/opt/zhihui/deploy`（compose、`.env`、`branding/`、证书无关的 nginx 源文件副本） |
 
-服务默认监听 `0.0.0.0:8787`，健康检查地址为 `/api/health`。
-
-## Docker
-
-```bash
-docker build -t zhihui-web .
-docker run -d --name zhihui-web -p 8787:8787 \
-  -e NODE_ENV=production \
-  -e ZH_ADMIN_KEY="请替换为强密码" \
-  -v zhihui-data:/app/data \
-  --restart unless-stopped zhihui-web
-```
-
-在云平台中将域名反向代理到容器的 `8787` 端口，并启用平台提供的 Let's Encrypt HTTPS。数据目录 `/app/data` 必须挂载持久卷。
-
-帽子云是静态网站平台，可使用构建命令 `npm run build:web`、输出目录 `web-dist` 部署官网前端。完整登录、任务、积分和 `/api/v1/studio/*` 接口需要同时运行 `npm start` 的 Node 服务，并将 `/api` 反向代理到该服务。
-
-## 管理员账号
-
-首次启动时自动创建用户名 `admin`。密码取自环境变量 `ZH_ADMIN_KEY`。生产环境若未设置该变量，服务会拒绝启动。
-
-## 模型中转站（new-api）
-
-中转层使用自建 new-api（镜像 `calciumion/new-api:latest`），与业务层 Node 服务分开部署。站点保留原有创作台、插件接口、ComfyUI 与视频模型，只把模型转发、账号镜像与额度记账交给 new-api。
-
-### 自有服务器部署（推荐，支持支付宝付款）
-
-Railway 需要绑定外币信用卡，长期方案改用一台香港/新加坡轻量云服务器，
-业务 Node 服务与 new-api 跑在同一台机器，Nginx 统一做 HTTPS 入口。
-完整说明见 [`deploy/README.md`](deploy/README.md)，服务器上执行：
+## 常用操作
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/WJT0824/zhihuiapi.cc/main/deploy/install.sh -o install.sh
-bash install.sh
+cd /opt/zhihui/deploy
+docker compose ps                      # 状态
+docker compose logs -f new-api         # 日志
+docker compose restart new-api         # 重启
+docker compose pull && docker compose up -d   # 升级镜像
+
+nginx -t && systemctl reload nginx     # 改完 nginx 配置后
+certbot renew --dry-run                # 检查证书续期
 ```
 
-脚本会装好 Docker、生成密钥、启动 `docker compose`、配 Nginx 并申请 Let's Encrypt 证书。
-DNS 把 `api` 与 `relay` 两条记录改成指向服务器 IP 的 A 记录即可，`@`/`www` 仍留帽子云。
+## 站点配置
 
-### Railway 部署步骤（旧方案，需要外币卡）
+站点品牌、导航、注册开关等都在 new-api 后台「系统设置」里维护；也可以用系统访问令牌直接调接口：
 
-1. 在项目里新建服务 → Deploy from Docker Image → 填入 `calciumion/new-api:latest`。
-2. 给该服务添加持久卷，挂载路径 `/data`（SQLite 数据文件存放处，必须挂载否则重启丢数据）。
-3. 配置环境变量：
+```bash
+TOKEN=$(cat /root/.newapi-access-token)   # 管理员系统访问令牌（服务器本地文件）
+curl -X PUT http://127.0.0.1:3000/api/option/ \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"key":"SystemName","value":"郅绘中转站"}'
+```
 
-   ```
-   TZ=Asia/Shanghai
-   SESSION_SECRET=<32 位随机字符串>
-   CRYPTO_SECRET=<32 位随机字符串>
-   ERROR_LOG_ENABLED=true
-   BATCH_UPDATE_ENABLED=true
-   NODE_NAME=zhihui-1
-   ```
+当前关键配置：
 
-4. 在服务设置里生成公开域名，端口填 `3000`，确认 `https://<域名>/api/status` 返回 JSON。
-5. 打开该域名完成 `/setup` 初始化，创建中转站管理员账号。
-6. 绑定自定义域 `api.zhihuiapi.cc`，并在域名服务商处添加 Railway 提示的 CNAME 记录。
+- 站名 `郅绘中转站`，Logo `https://zhihuiapi.cc/logo.png`（由 nginx 从 `deploy/branding/` 提供）
+- 主题：前端预设为浏览器本地设置，已通过「页脚 HTML」注入青绿主色（`--primary:#00d294`），全站默认白底青绿
+- 导航：主页 / 控制台 / 模型广场 / 文档；注册开放，邮箱验证与人机验证关闭
+- 分组：仅 `default`；充值只走兑换码，不接在线支付
 
-### 与站点打通
+## 上游渠道
 
-在 new-api 里用管理员账号生成系统访问令牌（用户设置 → 访问令牌），然后到郅绘运营后台「中转站（new-api）」面板：
+渠道在 new-api 后台「渠道」页维护。当前一条 `TokenFlux` 渠道指向 `https://tokenflux.cloud`，提供 12 个文本模型。
 
-1. 填写中转站地址与管理员令牌，点「测试连接」；
-2. 点「迁移存量用户」，把现有用户积分同步成 new-api 额度（已存在的账号会覆盖额度）；
-3. 之后在 new-api 控制台的「渠道」里配置上游 Key，「模型」里同步模型并设置价格。
+注意两点：
 
-### 计费映射
+1. 渠道的 `base_url` 必须指向真实可达的 OpenAI 兼容地址；留空会默认走 `api.openai.com`，在国内服务器上不可达。
+2. 令牌的「分组」必须与渠道所在分组一致，否则会出现「连接成功但模型列表为 0」。
 
-new-api 设置 `QuotaPerUnit=700000`、美元汇率 `7`，则 **1 积分 = 10000 quota = 0.1 元**，与站点「10 元 = 100 积分」一致。站点创作台生成一次 3 积分，即 30000 quota。
+## 备份与恢复
+
+```bash
+# 备份（数据 + 配置 + nginx + 证书续期配置）
+tar czf /root/backups/zhihuiapi-$(date +%F).tar.gz -C / \
+  opt/zhihui etc/nginx/sites-available etc/letsencrypt/renewal
+
+# 恢复数据库（先停容器）
+cd /opt/zhihui/deploy && docker compose stop new-api
+cp /root/backups/xxx/opt/zhihui/deploy/newapi-data/one-api.db ./newapi-data/one-api.db
+docker compose start new-api
+```
+
+2026-09-20 改造前的完整备份（含郅绘 `store.json`、new-api 原始库）保存在服务器 `/root/backups/`，并同步了一份到部署者本机桌面。
