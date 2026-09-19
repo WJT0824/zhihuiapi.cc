@@ -10,6 +10,12 @@ import {
   applyComfyBindings, targetDimensions, BUILT_IN_PRESETS, pickUpscaleModel, buildVectorWorkflow,
   summarizeParsed, detectPresetKind, builtInPreset, findVectorNodeClass,
 } from './comfy.mjs';
+import {
+  normalizeNewapiBaseUrl, newapiFetch, newapiStatus, newapiLogin, newapiAccessToken, newapiCreateUser,
+  newapiGetUser, newapiSetPoints, newapiAddPoints, newapiSubtractPoints, newapiPricing,
+  newapiModels, newapiListTokens, newapiCreateToken, newapiTokenKey, newapiUserLogs,
+  newapiRedeem, newapiCreateRedemptions, pointsToQuota, quotaToPoints,
+} from './newapi.mjs';
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -52,7 +58,7 @@ const uid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const passwordHash = (value, salt) => crypto.scryptSync(value, salt, 64).toString('hex');
-const defaultStore = () => ({ users: [], tasks: [], redemptionCodes: [], redemptions: [], rechargeNonces: [], ledger: [], sessions: {}, references: [], jobs: [], assets: [], workflows: [], comfyPresets: [], modelCache: [], aiConfig: { baseUrl: '', apiKey: '', model: '' }, comfy: { baseUrl: '', apiKey: '', enabled: true }, shortCode: { primary: '', legacy: [], allowLegacy: true } });
+const defaultStore = () => ({ users: [], tasks: [], redemptionCodes: [], redemptions: [], rechargeNonces: [], ledger: [], sessions: {}, references: [], jobs: [], assets: [], workflows: [], comfyPresets: [], modelCache: [], aiConfig: { baseUrl: '', apiKey: '', model: '' }, comfy: { baseUrl: '', apiKey: '', enabled: true }, newapi: { baseUrl: '', adminToken: '', enabled: true }, shortCode: { primary: '', legacy: [], allowLegacy: true } });
 let store = defaultStore();
 async function load() {
   await mkdir(DATA_DIR, { recursive: true });
@@ -60,7 +66,7 @@ async function load() {
   await mkdir(REF_DIR, { recursive: true });
   await mkdir(DOWNLOAD_DIR, { recursive: true });
   if (existsSync(DATA_FILE)) { try { store = JSON.parse(await readFile(DATA_FILE, 'utf8')); } catch { store = defaultStore(); } }
-  store.tasks ||= []; store.redemptionCodes ||= []; store.redemptions ||= []; store.rechargeNonces ||= []; store.ledger ||= []; store.sessions ||= {}; store.references ||= []; store.jobs ||= []; store.assets ||= []; store.workflows ||= []; store.comfyPresets ||= []; store.modelCache ||= []; store.aiConfig ||= { baseUrl: '', apiKey: '', model: '' }; store.comfy ||= { baseUrl: '', apiKey: '', enabled: true }; store.shortCode ||= { primary: '', legacy: [], allowLegacy: true }; if (!Array.isArray(store.shortCode.legacy)) store.shortCode.legacy = [];
+  store.tasks ||= []; store.redemptionCodes ||= []; store.redemptions ||= []; store.rechargeNonces ||= []; store.ledger ||= []; store.sessions ||= {}; store.references ||= []; store.jobs ||= []; store.assets ||= []; store.workflows ||= []; store.comfyPresets ||= []; store.modelCache ||= []; store.aiConfig ||= { baseUrl: '', apiKey: '', model: '' }; store.comfy ||= { baseUrl: '', apiKey: '', enabled: true }; store.newapi ||= { baseUrl: '', adminToken: '', enabled: true }; store.shortCode ||= { primary: '', legacy: [], allowLegacy: true }; if (!Array.isArray(store.shortCode.legacy)) store.shortCode.legacy = [];
   if (!store.users.length) {
     const passwordSalt = crypto.randomBytes(16).toString('hex');
     store.users.push({ id: uid(), nickname: 'admin', email: '', passwordSalt, passwordHash: passwordHash(ADMIN_KEY, passwordSalt), points: 1000, role: 'admin', createdAt: now() });
@@ -233,6 +239,157 @@ const publicWorkflowPreset = (preset) => ({
   updatedAt: preset.updatedAt,
 });
 
+// ---------------------------------------------------------------------------
+// new-api 中转站：账号镜像、额度同步、密钥代发
+// ---------------------------------------------------------------------------
+const activeNewapiConfig = () => {
+  const stored = store.newapi || {};
+  const raw = String(stored.baseUrl || process.env.NEWAPI_BASE_URL || '').trim();
+  let baseUrl = '';
+  if (raw) { try { baseUrl = normalizeNewapiBaseUrl(raw); } catch { baseUrl = ''; } }
+  return {
+    baseUrl,
+    adminToken: String(stored.adminToken || process.env.NEWAPI_ADMIN_TOKEN || '').trim(),
+    enabled: stored.enabled !== false,
+  };
+};
+const newapiReady = () => {
+  const config = activeNewapiConfig();
+  return Boolean(config.enabled && config.baseUrl && config.adminToken);
+};
+const publicRelayConfig = () => {
+  const config = activeNewapiConfig();
+  return {
+    configured: Boolean(config.baseUrl && config.adminToken),
+    enabled: config.enabled,
+    baseUrl: config.baseUrl,
+    consoleUrl: config.baseUrl ? `${config.baseUrl}/console` : '',
+    quotaPerPoint: 10000,
+    pointsPerYuan: 10,
+  };
+};
+const randomMirrorPassword = () => `${crypto.randomBytes(18).toString('base64url')}Aa1!`;
+// new-api caps usernames at 20 characters and keeps them unique, so the mirror
+// name is derived from the local id instead of the (possibly Chinese) nickname.
+const mirrorUsername = (user) => `zh${hash(String(user.id)).slice(0, 12)}`;
+async function findNewapiUserByName(config, username) {
+  const result = await newapiFetch(config.baseUrl, `/api/user/search?keyword=${encodeURIComponent(username)}&p=0&page_size=20`, { token: config.adminToken });
+  const payload = result.data;
+  const items = Array.isArray(payload) ? payload : payload?.items || payload?.data || [];
+  return items.find((item) => String(item?.username || '').toLowerCase() === String(username).toLowerCase()) || null;
+}
+/** Creates (or re-links) the mirrored new-api account for a local user. */
+async function ensureNewapiUser(user) {
+  const config = activeNewapiConfig();
+  if (!newapiReady() || !user) return null;
+  if (user.newapiUserId) return user.newapiUserId;
+  const username = mirrorUsername(user);
+  const password = user.newapiPassword || randomMirrorPassword();
+  let id = 0;
+  try {
+    await newapiCreateUser(config.baseUrl, config.adminToken, {
+      username,
+      password,
+      displayName: user.nickname || username,
+      points: Number(user.points) || 0,
+    });
+    const created = await findNewapiUserByName(config, username);
+    id = Number(created?.id || 0);
+  } catch (error) {
+    const existing = await findNewapiUserByName(config, username).catch(() => null);
+    if (!existing) throw error;
+    id = Number(existing.id || 0);
+  }
+  if (!id) {
+    const found = await findNewapiUserByName(config, username).catch(() => null);
+    id = Number(found?.id || 0);
+  }
+  if (!id) throw new Error('中转站账号创建后未能读取到用户编号。');
+  user.newapiUserId = id;
+  user.newapiUsername = username;
+  user.newapiPassword = password;
+  user.newapiLinkedAt = now();
+  await persist();
+  // Creating a user does not guarantee the initial quota is applied, so the
+  // local snapshot is pushed explicitly.
+  try {
+    await newapiSetPoints(config.baseUrl, config.adminToken, id, Number(user.points) || 0);
+  } catch { /* quota can be reconciled later from the ops backend */ }
+  return id;
+}
+async function newapiUserSession(user) {
+  const config = activeNewapiConfig();
+  if (!newapiReady()) throw new Error('中转站尚未配置。');
+  await ensureNewapiUser(user);
+  if (user.newapiAccessToken) return user.newapiAccessToken;
+  const login = await newapiLogin(config.baseUrl, user.newapiUsername, user.newapiPassword);
+  const token = await newapiAccessToken(config.baseUrl, login.accessToken);
+  if (!token) throw new Error('未能获取中转站访问令牌。');
+  user.newapiAccessToken = token;
+  await persist();
+  return token;
+}
+async function refreshUserPoints(user) {
+  const config = activeNewapiConfig();
+  if (!newapiReady() || !user?.newapiUserId) return null;
+  const info = await newapiGetUser(config.baseUrl, config.adminToken, user.newapiUserId);
+  const quota = Number(info?.quota ?? info?.user?.quota);
+  if (!Number.isFinite(quota)) return null;
+  user.points = Math.max(0, quotaToPoints(quota));
+  await persist();
+  return user.points;
+}
+/**
+ * Moves points between the local balance and new-api quota. new-api is the
+ * ledger once the relay is configured; the local number is a cached snapshot.
+ */
+async function adjustUserPoints(user, points, mode) {
+  const amount = Math.max(0, Math.round(Number(points) || 0));
+  if (!amount) return { synced: false, points: user?.points ?? 0 };
+  if (!newapiReady()) {
+    if (mode === 'add') user.points += amount;
+    else if (mode === 'subtract') user.points = Math.max(0, user.points - amount);
+    else user.points = amount;
+    await persist();
+    return { synced: false, points: user.points };
+  }
+  try {
+    await ensureNewapiUser(user);
+    const config = activeNewapiConfig();
+    if (mode === 'add') await newapiAddPoints(config.baseUrl, config.adminToken, user.newapiUserId, amount);
+    else if (mode === 'subtract') await newapiSubtractPoints(config.baseUrl, config.adminToken, user.newapiUserId, amount);
+    else await newapiSetPoints(config.baseUrl, config.adminToken, user.newapiUserId, amount);
+  } catch (error) {
+    // The relay being unreachable must not block generation or redemption:
+    // fall back to the local snapshot and let a later sync reconcile it.
+    if (mode === 'add') user.points += amount;
+    else if (mode === 'subtract') user.points = Math.max(0, user.points - amount);
+    else user.points = amount;
+    await persist();
+    return { synced: false, error: String(error.message || error), points: user.points };
+  }
+  const synced = await refreshUserPoints(user).catch(() => null);
+  if (synced === null) {
+    user.points = mode === 'add' ? (user.points || 0) + amount : mode === 'subtract' ? Math.max(0, (user.points || 0) - amount) : amount;
+    await persist();
+  }
+  return { synced: true, points: user.points };
+}
+async function relayKeyForUser(user) {
+  const config = activeNewapiConfig();
+  if (!newapiReady()) throw Object.assign(new Error('中转站尚未配置，请联系管理员。'), { status: 503 });
+  const session = await newapiUserSession(user);
+  const list = await newapiListTokens(config.baseUrl, session).catch(() => null);
+  const items = Array.isArray(list) ? list : list?.items || [];
+  if (items.length) {
+    const first = items.find((item) => Number(item.status) !== 2) || items[0];
+    const key = await newapiTokenKey(config.baseUrl, session, first.id).catch(() => '');
+    if (key) return { id: first.id, name: first.name || '郅绘默认密钥', key, reused: true };
+  }
+  const created = await newapiCreateToken(config.baseUrl, session, { name: '郅绘默认密钥' });
+  return { ...created, reused: false };
+}
+
 const comfyJobError = (status) => {
   const messages = Array.isArray(status?.messages) ? status.messages : [];
   const executionError = messages.find((item) => Array.isArray(item) && item[0] === 'execution_error');
@@ -382,6 +539,8 @@ const publicPluginConfig = () => {
     editModel: ai.model || 'gpt-image-2',
     pointsPerGeneration: 3,
     workflowsUrl: `${(PUBLIC_API_ORIGIN || 'https://zhihuiapicc-production.up.railway.app').replace(/\/+$/, '')}/v1/studio/workflows/public`,
+    relayOrigin: `${(activeNewapiConfig().baseUrl || 'https://api.zhihuiapi.cc').replace(/\/+$/, '')}/`,
+    relayEnabled: publicRelayConfig().configured,
     comfyEnabled: Boolean(comfy.enabled && comfy.baseUrl),
     workflows: listWorkflowPresets().map(publicWorkflowPreset),
     updatedAt: now(),
@@ -606,7 +765,7 @@ async function redeemRechargeCode(user, rawCode) {
     const payload = shortCode;
     if (store.rechargeNonces.some((item) => item.nonce === payload.nonce)) throw Object.assign(new Error('该积分访问码已使用。'), { status: 409 });
     const points = Number(payload.points);
-    user.points += points;
+    await adjustUserPoints(user, points, 'add');
     store.rechargeNonces.push({ nonce: payload.nonce, userId: user.id, points, amountCny: points / 10, redeemedAt: now() });
     store.redemptions.push({ id: uid(), code: upperCode.startsWith(RECHARGE_SHORT_CODE_PREFIX) ? 'ZHRC1-S' : 'ZHS1', secretSource: payload.secretSource || '', userId: user.id, points, createdAt: now() });
     store.ledger.push({ id: uid(), userId: user.id, type: 'redeem', points, createdAt: now() });
@@ -620,7 +779,7 @@ async function redeemRechargeCode(user, rawCode) {
     const payload = verifyPluginRechargeCode(code, user);
     if (store.rechargeNonces.some((item) => item.nonce === payload.nonce)) throw Object.assign(new Error('该积分访问码已使用。'), { status: 409 });
     const points = Number(payload.points);
-    user.points += points;
+    await adjustUserPoints(user, points, 'add');
     store.rechargeNonces.push({ nonce: payload.nonce, userId: user.id, points, amountCny: Number(payload.amountCny), redeemedAt: now() });
     store.redemptions.push({ id: uid(), code: 'ZHRC1', userId: user.id, points, createdAt: now() });
     store.ledger.push({ id: uid(), userId: user.id, type: 'redeem', points, createdAt: now() });
@@ -631,7 +790,7 @@ async function redeemRechargeCode(user, rawCode) {
   if (!available) throw Object.assign(new Error('兑换码无效或已使用'), { status: 400 });
   available.usedAt = now();
   available.userId = user.id;
-  user.points += available.points;
+  await adjustUserPoints(user, available.points, 'add');
   store.redemptions.push({ id: uid(), code: available.code, userId: user.id, points: available.points, createdAt: now() });
   store.ledger.push({ id: uid(), userId: user.id, type: 'redeem', points: available.points, createdAt: now() });
   await persist();
@@ -847,6 +1006,7 @@ async function gateway(req, res, pathName) {
     const salt = crypto.randomBytes(16).toString('hex');
     const user = { id: uid(), email, nickname, username: nickname, passwordSalt: salt, passwordHash: passwordHash(password, salt), points: 100, role: 'user', createdAt: now() };
     store.users.push(user); await persist();
+    if (newapiReady()) { try { await ensureNewapiUser(user); } catch { /* relay link is retried on next quota change */ } }
     return send(res, 201, { success: true, ...issueTokens(user), user: safeUser(user) });
   }
   if (req.method === 'POST' && pathName === '/v1/auth/refresh') {
@@ -959,11 +1119,11 @@ async function gateway(req, res, pathName) {
     try { aiOverride = resolveAiConfig(user, { ...body, baseUrl: body.baseUrl || body.ai_base_url || req.headers['x-ai-base-url'], apiKey: body.apiKey || body.ai_api_key || req.headers['x-ai-key'] }); }
     catch (error) { return fail(400, error.message); }
     const job = { id: uid(), requestId, userId: user.id, prompt: String(body.prompt || ''), model: String(body.model || body.modelId || aiOverride.model), aspectRatio: String(body.aspect_ratio || '1:1'), resolution: String(body.resolution || '1K'), quality: String(body.quality || 'auto'), quantity: Math.max(1, Math.min(4, Number(body.quantity) || 1)), status: 'processing', cost, createdAt: now() };
-    if (user.role !== 'admin') user.points -= cost;
+    if (user.role !== 'admin') await adjustUserPoints(user, cost, 'subtract');
     store.jobs.push(job); store.ledger.push({ id: uid(), userId: user.id, type: 'image', points: user.role === 'admin' ? 0 : -cost, requestId, createdAt: now() }); await persist();
     const maskId = String(body.mask_id || body.maskId || '').trim();
     try { await runGatewayGeneration(job, user, Array.isArray(body.reference_ids) ? body.reference_ids : [], aiOverride, maskId); await persist(); }
-    catch (err) { if (user.role !== 'admin') user.points += cost; job.status = 'failed'; job.error = String(err.message || err).slice(0, 500); store.ledger.push({ id: uid(), userId: user.id, type: 'image-refund', points: user.role === 'admin' ? 0 : cost, requestId, createdAt: now() }); await persist(); }
+    catch (err) { if (user.role !== 'admin') await adjustUserPoints(user, cost, 'add').catch(() => {}); job.status = 'failed'; job.error = String(err.message || err).slice(0, 500); store.ledger.push({ id: uid(), userId: user.id, type: 'image-refund', points: user.role === 'admin' ? 0 : cost, requestId, createdAt: now() }); await persist(); }
     return send(res, job.status === 'succeeded' ? 201 : 200, gatewayJob(job));
   }
   const assetMatch = pathName.match(/^\/v1\/image\/assets\/([^/]+)$/);
@@ -1039,7 +1199,7 @@ async function gateway(req, res, pathName) {
       prompt: String(body.prompt || ''), model: preset.name, workflowCode: preset.code, engine: 'comfy',
       quality: 'high', quantity: 1, status: 'processing', progress: 0, cost, createdAt: now(),
     };
-    if (user.role !== 'admin') user.points -= cost;
+    if (user.role !== 'admin') await adjustUserPoints(user, cost, 'subtract');
     store.jobs.push(job);
     store.ledger.push({ id: uid(), userId: user.id, type: 'workflow', points: user.role === 'admin' ? 0 : -cost, requestId, workflowCode: preset.code, createdAt: now() });
     await persist();
@@ -1055,7 +1215,7 @@ async function gateway(req, res, pathName) {
       seed: body.seed,
       upscaleModel: body.upscale_model || body.upscaleModel,
     }).catch(async (error) => {
-      if (user.role !== 'admin') user.points += cost;
+      if (user.role !== 'admin') await adjustUserPoints(user, cost, 'add').catch(() => {});
       job.status = 'failed';
       job.error = String(error.message || error).slice(0, 500);
       store.ledger.push({ id: uid(), userId: user.id, type: 'workflow-refund', points: user.role === 'admin' ? 0 : cost, requestId, workflowCode: preset.code, createdAt: now() });
@@ -1228,6 +1388,17 @@ async function gateway(req, res, pathName) {
 async function api(req, res, pathName) {
   if (req.method === 'OPTIONS') return send(res, 204, null);
   if (req.method === 'GET' && pathName === '/api/health') return send(res, 200, { ok: true, service: 'zhihui-web', time: now(), apiOrigin: PUBLIC_API_ORIGIN || '', aiEnabled: Boolean(activeAiConfig().apiKey) });
+  if (req.method === 'GET' && pathName === '/api/relay/status') return send(res, 200, { success: true, relay: publicRelayConfig() });
+  if (req.method === 'GET' && (pathName === '/api/relay/pricing' || pathName === '/api/relay/models')) {
+    const relay = activeNewapiConfig();
+    if (!relay.baseUrl || !relay.adminToken) return send(res, 200, { success: true, configured: false, models: [], groups: [] });
+    try {
+      const pricing = await newapiPricing(relay.baseUrl);
+      return send(res, 200, { success: true, configured: true, models: pricing.models, groups: pricing.groups, usableGroup: pricing.usableGroup || {} });
+    } catch (error) {
+      return send(res, 200, { success: true, configured: true, degraded: true, models: [], error: String(error.message || error).slice(0, 200) });
+    }
+  }
   const body = await parseBody(req);
   if (req.method === 'POST' && pathName === '/api/v1/auth/register') {
     const nickname = String(body.nickname || '').trim(); const password = String(body.password || '');
@@ -1235,7 +1406,8 @@ async function api(req, res, pathName) {
     const email = String(body.email || '').trim().toLowerCase();
     if (store.users.some((u) => u.nickname === nickname || (email && (u.email || '').toLowerCase() === email))) return send(res, 409, { error: '该账号已存在。' });
     const passwordSalt = crypto.randomBytes(16).toString('hex');
-    const user = { id: uid(), nickname, email, passwordSalt, passwordHash: passwordHash(password, passwordSalt), points: 100, role: 'user', createdAt: now() }; store.users.push(user);
+    const user = { id: uid(), nickname, username: nickname, email, passwordSalt, passwordHash: passwordHash(password, passwordSalt), points: 100, role: 'user', createdAt: now() }; store.users.push(user);
+    if (newapiReady()) { try { await ensureNewapiUser(user); } catch { /* relay link is retried on next quota change */ } }
     const token = uid(); store.sessions[hash(token)] = user.id; await persist(); return send(res, 201, { token, user: safeUser(user) });
   }
   if (req.method === 'POST' && pathName === '/api/v1/auth/login') {
@@ -1246,6 +1418,53 @@ async function api(req, res, pathName) {
   }
   const user = tokenUser(req);
   if (pathName === '/api/v1/auth/me' && req.method === 'GET') return user ? send(res, 200, { user: safeUser(user) }) : send(res, 401, { error: '未登录。' });
+  if (pathName === '/api/relay/balance' && req.method === 'GET') {
+    if (!newapiReady()) return send(res, 200, { success: true, synced: false, points: user.points });
+    const points = await refreshUserPoints(user).catch(() => null);
+    return send(res, 200, { success: true, synced: points !== null, points: user.points });
+  }
+  if (pathName === '/api/relay/key' && req.method === 'GET') {
+    try {
+      const key = await relayKeyForUser(user);
+      return send(res, 200, { success: true, key: key.key, name: key.name, id: key.id, reused: key.reused, baseUrl: activeNewapiConfig().baseUrl });
+    } catch (error) {
+      return send(res, error.status || 500, { success: false, error: String(error.message || error) });
+    }
+  }
+  if (pathName === '/api/relay/usage' && req.method === 'GET') {
+    if (!newapiReady()) return send(res, 200, { success: true, synced: false, items: [] });
+    try {
+      const session = await newapiUserSession(user);
+      const logs = await newapiUserLogs(activeNewapiConfig().baseUrl, session, {
+        page: Number(route(req).query.get('page')) || 1,
+        size: Number(route(req).query.get('size')) || 20,
+      });
+      const items = Array.isArray(logs) ? logs : logs?.items || logs?.data || [];
+      return send(res, 200, { success: true, synced: true, items });
+    } catch (error) {
+      return send(res, 200, { success: true, synced: false, items: [], error: String(error.message || error).slice(0, 200) });
+    }
+  }
+  if (pathName === '/api/relay/redeem' && req.method === 'POST') {
+    const code = String(body.code || body.key || '').trim();
+    if (!code) return send(res, 400, { error: '请输入兑换码。' });
+    if (!newapiReady()) {
+      try {
+        const result = await redeemRechargeCode(user, code);
+        return send(res, 200, { success: true, synced: false, credited: result.credited, points: result.points });
+      } catch (error) {
+        return send(res, error.status || 400, { error: error.message || String(error) });
+      }
+    }
+    try {
+      const session = await newapiUserSession(user);
+      await newapiRedeem(activeNewapiConfig().baseUrl, session, code);
+      const points = await refreshUserPoints(user).catch(() => null);
+      return send(res, 200, { success: true, synced: points !== null, points: user.points });
+    } catch (error) {
+      return send(res, error.status || 400, { error: String(error.message || error) });
+    }
+  }
   if (!user) return send(res, 401, { error: '请先登录。' });
   if (req.method === 'GET' && pathName === '/api/v1/tasks') return send(res, 200, { tasks: store.tasks.filter((t) => t.userId === user.id).sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(publicTask) });
   if (req.method === 'DELETE' && pathName === '/api/v1/tasks') {
@@ -1308,6 +1527,84 @@ async function api(req, res, pathName) {
   }
   const isAdmin = user.role === 'admin' || req.headers['x-admin-key'] === ADMIN_KEY;
   if (req.method === 'GET' && pathName === '/api/v1/admin/overview') { if (!isAdmin) return send(res,403,{error:'无权限。'}); return send(res,200,{users:store.users.map(safeUser), tasks:store.tasks, redemptions:store.redemptions, metrics:{users:store.users.length,tasks:store.tasks.length,points:store.users.reduce((n,u)=>n+u.points,0)}}); }
+  if (pathName === '/api/v1/admin/relay/config' && req.method === 'GET') {
+    if (!isAdmin) return send(res, 403, { error: '无权限。' });
+    const config = activeNewapiConfig();
+    return send(res, 200, {
+      success: true,
+      config: {
+        baseUrl: config.baseUrl,
+        enabled: config.enabled,
+        adminTokenConfigured: Boolean(config.adminToken),
+        adminTokenPreview: config.adminToken ? `${config.adminToken.slice(0, 4)}…${config.adminToken.slice(-4)}` : '',
+        quotaPerPoint: 10000,
+      },
+    });
+  }
+  if (pathName === '/api/v1/admin/relay/config' && (req.method === 'PUT' || req.method === 'POST')) {
+    if (!isAdmin) return send(res, 403, { error: '无权限。' });
+    const current = activeNewapiConfig();
+    const rawBase = body.baseUrl !== undefined ? String(body.baseUrl) : current.baseUrl;
+    let baseUrl = '';
+    if (rawBase.trim()) { try { baseUrl = normalizeNewapiBaseUrl(rawBase); } catch (error) { return send(res, 400, { error: error.message }); } }
+    const adminToken = body.adminToken !== undefined ? String(body.adminToken).trim() : current.adminToken;
+    const enabled = body.enabled === undefined ? current.enabled : Boolean(body.enabled);
+    store.newapi = { baseUrl, adminToken, enabled };
+    await persist();
+    return send(res, 200, { success: true, message: baseUrl ? `已保存中转站配置：${baseUrl}` : '已清空中转站地址。' });
+  }
+  if (pathName === '/api/v1/admin/relay/test' && req.method === 'POST') {
+    if (!isAdmin) return send(res, 403, { error: '无权限。' });
+    const config = activeNewapiConfig();
+    const target = body.baseUrl !== undefined && String(body.baseUrl).trim()
+      ? normalizeNewapiBaseUrl(body.baseUrl)
+      : config.baseUrl;
+    if (!target) return send(res, 400, { error: '请先填写中转站地址。' });
+    try {
+      const status = await newapiStatus(target);
+      let modelCount = 0;
+      try {
+        const pricing = await newapiPricing(target);
+        modelCount = pricing.models.length;
+      } catch { /* pricing may require auth */ }
+      return send(res, 200, { success: true, message: `连接成功，已读取 ${modelCount} 个模型`, status: status.data || null, modelCount });
+    } catch (error) {
+      return send(res, 400, { error: `连接失败：${String(error.message || error).slice(0, 200)}` });
+    }
+  }
+  if (pathName === '/api/v1/admin/relay/migrate' && req.method === 'POST') {
+    if (!isAdmin) return send(res, 403, { error: '无权限。' });
+    if (!newapiReady()) return send(res, 400, { error: '请先配置并测试中转站连接。' });
+    const rows = [];
+    let linked = 0;
+    let failed = 0;
+    for (const item of store.users) {
+      const before = Number(item.points) || 0;
+      try {
+        await ensureNewapiUser(item);
+        await newapiSetPoints(activeNewapiConfig().baseUrl, activeNewapiConfig().adminToken, item.newapiUserId, before);
+        await refreshUserPoints(item);
+        linked += 1;
+        rows.push({ id: item.id, nickname: item.nickname || item.username || '', newapiUserId: item.newapiUserId, pointsBefore: before, pointsAfter: item.points, ok: true });
+      } catch (error) {
+        failed += 1;
+        rows.push({ id: item.id, nickname: item.nickname || item.username || '', pointsBefore: before, ok: false, error: String(error.message || error).slice(0, 200) });
+      }
+    }
+    return send(res, 200, { success: true, total: store.users.length, linked, failed, rows });
+  }
+  if (pathName === '/api/v1/admin/relay/redemptions' && req.method === 'POST') {
+    if (!isAdmin) return send(res, 403, { error: '无权限。' });
+    if (!newapiReady()) return send(res, 400, { error: '请先配置并测试中转站连接。' });
+    const points = Math.max(1, Math.min(100000, Number(body.points) || 100));
+    const count = Math.max(1, Math.min(50, Number(body.count) || 1));
+    try {
+      const codes = await newapiCreateRedemptions(activeNewapiConfig().baseUrl, activeNewapiConfig().adminToken, { points, count });
+      return send(res, 201, { success: true, codes, points, count, source: 'new-api' });
+    } catch (error) {
+      return send(res, 400, { error: String(error.message || error) });
+    }
+  }
   if (req.method === 'POST' && pathName === '/api/v1/admin/redemption-codes') {
     if (!isAdmin) return send(res, 403, { error: '无权限。' });
     const points = Math.max(1, Math.min(100000, Number(body.points) || 100));

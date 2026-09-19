@@ -295,3 +295,125 @@ test('plugin short recharge codes keep redeeming after the signing key moves to 
   const account = await request('/v1/account', { headers: authHeader });
   assert.equal(account.body.user.credits, startBalance + 200 + 300 + 500);
 });
+
+test('new-api relay: account mirroring, quota sync, key issuing and migration', async () => {
+  const relay = { users: new Map(), nextUserId: 100, manageCalls: [] };
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    let body = {};
+    if (req.method !== 'GET') {
+      let raw = '';
+      for await (const chunk of req) raw += chunk;
+      try { body = raw ? JSON.parse(raw) : {}; } catch { body = {}; }
+    }
+    const send = (payload) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(payload)); };
+    if (url.pathname === '/api/status') return send({ success: true, data: { version: 'test', chat_link: '' } });
+    if (url.pathname === '/api/pricing') return send({ success: true, data: [{ model_name: 'gpt-4o', quota_type: 0, model_ratio: 1 }, { model_name: 'gpt-image-1', quota_type: 1, model_price: 0.03 }], groups: ['default'] });
+    if (url.pathname === '/api/user/login') { relay.lastLogin = body.username; return send({ success: true, data: { access_token: 'session-token' } }); }
+    if (url.pathname === '/api/user/token') return send({ success: true, data: { token: 'user-access-token' } });
+    if (url.pathname === '/api/user/' && req.method === 'POST') {
+      const id = relay.nextUserId++;
+      relay.users.set(body.username, { id, username: body.username, quota: 0 });
+      return send({ success: true, data: null });
+    }
+    if (url.pathname === '/api/user/search') {
+      const keyword = url.searchParams.get('keyword') || '';
+      const found = relay.users.get(keyword);
+      return send({ success: true, data: found ? [found] : [] });
+    }
+    if (url.pathname.startsWith('/api/user/') && req.method === 'GET') {
+      const id = Number(url.pathname.split('/').pop());
+      const user = [...relay.users.values()].find((item) => item.id === id);
+      return send({ success: true, data: user || null });
+    }
+    if (url.pathname === '/api/user/manage') {
+      relay.manageCalls.push(body);
+      const user = [...relay.users.values()].find((item) => item.id === Number(body.id));
+      if (user) {
+        if (body.mode === 'add') user.quota += Number(body.value) || 0;
+        else if (body.mode === 'subtract') user.quota = Math.max(0, user.quota - (Number(body.value) || 0));
+        else user.quota = Number(body.value) || 0;
+      }
+      return send({ success: true, data: null });
+    }
+    if (url.pathname === '/api/token/' && req.method === 'GET') return send({ success: true, data: [{ id: 1, name: '郅绘默认密钥', status: 1 }] });
+    if (url.pathname === '/api/token/' && req.method === 'POST') return send({ success: true, data: null });
+    if (/^\/api\/token\/\d+\/key$/.test(url.pathname)) return send({ success: true, data: { key: 'sk-relay-test-key' } });
+    if (url.pathname === '/api/log/self') return send({ success: true, data: { items: [{ id: 1, model_name: 'gpt-4o', quota: 5000, created_at: 1 }] } });
+    if (url.pathname === '/api/user/topup') return send({ success: true, data: null });
+    if (url.pathname === '/api/redemption/' && req.method === 'GET') return send({ success: true, data: [{ id: 1, key: 'REDEEM-TEST-1' }] });
+    if (url.pathname === '/api/redemption/') return send({ success: true, data: null });
+    res.writeHead(404); res.end('{}');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const relayBase = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const adminLogin = await request('/v1/auth/login', { method: 'POST', body: JSON.stringify({ nickname: 'admin', password: 'test-admin-password' }) });
+    const adminHeader = { authorization: `Bearer ${adminLogin.body.access_token}` };
+
+    const saved = await request('/api/v1/admin/relay/config', {
+      method: 'PUT',
+      headers: adminHeader,
+      body: JSON.stringify({ baseUrl: relayBase, adminToken: 'root-access-token', enabled: true }),
+    });
+    assert.equal(saved.status, 200);
+
+    const status = await request('/api/relay/status');
+    assert.equal(status.body.relay.configured, true);
+    assert.equal(status.body.relay.baseUrl, relayBase);
+    assert.equal(status.body.relay.quotaPerPoint, 10000);
+
+    const tested = await request('/api/v1/admin/relay/test', { method: 'POST', headers: adminHeader, body: JSON.stringify({}) });
+    assert.equal(tested.status, 200);
+    assert.equal(tested.body.modelCount, 2);
+
+    const pricing = await request('/api/relay/pricing');
+    assert.equal(pricing.body.configured, true);
+    assert.equal(pricing.body.models.length, 2);
+
+    const email = `relay-${Date.now()}@example.com`;
+    const nickname = `中转${Date.now()}`;
+    const before = relay.users.size;
+    const registered = await request('/v1/auth/register', { method: 'POST', body: JSON.stringify({ email, nickname, password: 'testpass123' }) });
+    assert.equal(registered.status, 201);
+    assert.equal(relay.users.size, before + 1, 'mirror account should be created on register');
+    const mirror = [...relay.users.values()].pop();
+    assert.match(mirror.username, /^zh[0-9a-f]{12}$/);
+    const authHeader = { authorization: `Bearer ${registered.body.access_token}` };
+
+    const balance = await request('/api/relay/balance', { headers: authHeader });
+    assert.equal(balance.body.synced, true);
+    assert.equal(balance.body.points, 100);
+
+    const key = await request('/api/relay/key', { headers: authHeader });
+    assert.equal(key.status, 200);
+    assert.equal(key.body.key, 'sk-relay-test-key');
+
+    const usage = await request('/api/relay/usage', { headers: authHeader });
+    assert.equal(usage.body.synced, true);
+    assert.equal(usage.body.items.length, 1);
+
+    const redeem = await request('/api/relay/redeem', { method: 'POST', headers: authHeader, body: JSON.stringify({ code: 'REDEEM-TEST-1' }) });
+    assert.equal(redeem.status, 200);
+    assert.equal(redeem.body.synced, true);
+
+    const generation = await request('/v1/image/generations', {
+      method: 'POST',
+      headers: authHeader,
+      body: JSON.stringify({ request_id: `relay-charge-${Date.now()}`, prompt: '测试扣费', model: 'gpt-image-2' }),
+    });
+    assert.equal(generation.status === 200 || generation.status === 201, true);
+    assert.ok(relay.manageCalls.some((call) => call.mode === 'subtract' && call.value === 30000), 'generation should subtract 3 points of quota');
+
+    const migrated = await request('/api/v1/admin/relay/migrate', { method: 'POST', headers: adminHeader, body: JSON.stringify({}) });
+    assert.equal(migrated.status, 200);
+    assert.ok(migrated.body.linked >= 1);
+    assert.ok(migrated.body.rows.every((row) => row.ok || row.error));
+
+    const codes = await request('/api/v1/admin/relay/redemptions', { method: 'POST', headers: adminHeader, body: JSON.stringify({ points: 100, count: 1 }) });
+    assert.equal(codes.status, 201);
+    assert.deepEqual(codes.body.codes, ['REDEEM-TEST-1']);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

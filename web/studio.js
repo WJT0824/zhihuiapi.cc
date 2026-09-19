@@ -22,6 +22,9 @@ const state = {
   camera: { x: 20, y: 10, zoom: 1 },
   tasks: [],
   models: [],
+  relay: {},
+  relayModels: [],
+  relayGroups: [],
   refMap: {},
   pendingFile: null,
   toastTimer: null
@@ -67,8 +70,8 @@ function toast(message, tone) {
 function userInitial() { return state.user ? (state.user.nickname || state.user.username || '?' ).slice(0, 1).toUpperCase() : '?'; }
 function topbar(active) {
   const pages = state.user
-    ? [['studio', '创作台', '◇'], ['history', '任务历史', '◷'], ['wallet', '积分中心', '◇'], ['settings', '个人设置', '⚙'], ['download', '下载插件', '⭳'], state.user.role === 'admin' ? ['admin', '运营后台', '▣'] : null]
-    : [['home', '首页', '⌂'], ['download', '下载插件', '⭳']];
+    ? [['studio', '创作台', '◇'], ['models', '模型广场', '◈'], ['pricing', '价格', '¥'], ['docs', '接入文档', '▤'], ['history', '任务历史', '◷'], ['wallet', '积分中心', '◇'], ['settings', '个人设置', '⚙'], ['download', '下载插件', '⭳'], state.user.role === 'admin' ? ['admin', '运营后台', '▣'] : null]
+    : [['home', '首页', '⌂'], ['models', '模型广场', '◈'], ['pricing', '价格', '¥'], ['docs', '接入文档', '▤'], ['download', '下载插件', '⭳']];
   const links = (pages.filter(Boolean)).map(([p, name, ic]) => `<a href="${p === 'download' ? '/downloads/' : '#' + p}" class="${active === p ? 'active' : ''}"><i>${ic}</i> <span>${name}</span></a>`).join('');
   return `<header class="topbar">
     <a class="brand" href="#studio"><img class="logo" src="/logo.png" alt="郅绘"><span><b>郅绘</b><small>AI DESIGN WORKSPACE</small></span></a>
@@ -125,7 +128,7 @@ function authPage() {
 }
 
 function pageTitle(active) {
-  return ({ studio: '创作台', history: '任务历史', wallet: '积分中心', settings: '个人设置', admin: '运营后台' })[active] || '';
+  return ({ studio: '创作台', models: '模型广场', pricing: '模型价格', docs: '接入文档', history: '任务历史', wallet: '积分中心', settings: '个人设置', admin: '运营后台' })[active] || '';
 }
 
 function workspaceShell(content, active) {
@@ -443,7 +446,95 @@ function walletPage() {
   return workspaceShell(`<div style="max-width:860px;margin:0 auto;padding:26px 18px">
     <div class="panel-card"><h3 style="margin-bottom:12px">可用积分</h3><div class="stats"><div class="stat"><b>${money(points)}</b><span>积分余额</span></div><div class="stat"><b>10</b><span>每次生成消耗</span></div><div class="stat"><b>平台</b><span>服务模式</span></div><div class="stat"><b>∞</b><span>云端记录</span></div></div></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">积分兑换</h3><form id="redeem-form"><label class="field"><span>兑换码</span><input class="input" name="code" required placeholder="输入 ZHRC1 开头的积分访问码"></label><button class="btn primary" style="margin-top:14px">立即兑换</button></form><p class="error-note" id="redeem-error"></p></div>
+    <div class="panel-card"><h3 style="margin-bottom:10px">我的 API Key</h3>
+      <p class="muted" style="margin:0 0 12px">用于调用中转接口，与站点积分共用同一份余额。接口地址：<code id="relay-base">${esc((state.relay && state.relay.baseUrl) || '未配置')}</code></p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center"><button class="btn primary" data-action="load-relay-key">${relayConfigured() ? '领取 / 查看 API Key' : '中转站未配置'}</button><button class="btn" data-action="go-docs">接入文档</button></div>
+      <p class="code-block" id="relay-key-box" style="margin-top:12px;display:none"></p></div>
+    <div class="panel-card"><h3 style="margin-bottom:12px">最近调用记录</h3>
+      <div id="relay-usage"><p class="muted" style="margin:0">点击下方按钮从新接口读取用量日志。</p></div>
+      <button class="btn" style="margin-top:12px" data-action="load-relay-usage">刷新调用记录</button></div>
   </div>`, 'wallet');
+}
+
+async function loadRelay() {
+  try { const d = await api('/api/relay/status'); state.relay = d.relay || {}; }
+  catch { state.relay = state.relay || {}; }
+  return state.relay;
+}
+async function loadRelayModels() {
+  try {
+    const d = await api('/api/relay/pricing');
+    state.relayModels = (d.models || []).filter((m) => m && (m.model_name || m.model));
+    state.relayGroups = d.groups || [];
+  } catch { state.relayModels = []; state.relayGroups = []; }
+  return state.relayModels;
+}
+function relayConfigured() { return Boolean(state.relay && state.relay.configured); }
+function modelDisplayName(model) { return String(model.model_name || model.model || ''); }
+function modelGroupOf(model) {
+  if (Array.isArray(model.enable_groups) && model.enable_groups.length) return model.enable_groups.join(' / ');
+  return 'default';
+}
+function modelPriceText(model) {
+  if (Number(model.quota_type) === 1) {
+    const yuan = (Number(model.model_price || 0) * 7).toFixed(2);
+    return yuan + ' 元 / 次';
+  }
+  const ratio = Number(model.model_ratio || 0);
+  const completion = Number(model.completion_ratio || 0);
+  return '输入 ' + (ratio * 7).toFixed(2) + ' 元/百万 · 输出 ' + (completion * 7).toFixed(2) + ' 元/百万';
+}
+function modelKindOf(model) {
+  const name = modelDisplayName(model).toLowerCase();
+  if (/(^|[^a-z])(image|dall|flux|seedream|wanx|qwen-image|gpt-image|midjourney|mj_)/.test(name)) return '图像';
+  if (/(embedding|embed|bge|m3e)/.test(name)) return '向量';
+  if (/(whisper|tts|audio|speech|voice|suno)/.test(name)) return '语音';
+  if (/rerank/.test(name)) return '重排';
+  return '文本';
+}
+function relayNoticeCard() {
+  const relay = state.relay || {};
+  if (relayConfigured()) {
+    return '<div class="panel-card relay-ready"><h3 style="margin-bottom:8px">中转服务已就绪</h3>' +
+      '<p class="muted" style="margin:0 0 10px">接口地址 <code>' + esc(relay.baseUrl) + '/v1</code>，兼容 OpenAI / Claude / Gemini 三种调用格式。登录后可在积分中心领取你的 API Key。</p>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap"><a class="btn primary" href="' + esc(relay.consoleUrl || relay.baseUrl || '#') + '" target="_blank" rel="noopener">打开控制台</a><button class="btn" data-action="go-docs">查看接入示例</button></div></div>';
+  }
+  return '<div class="panel-card relay-pending"><h3 style="margin-bottom:8px">中转服务待配置</h3>' +
+    '<p class="muted" style="margin:0">管理员在运营后台填写中转站地址与管理员令牌并测试通过后，这里会自动显示全部可用模型。</p></div>';
+}
+function modelsPage() {
+  const models = state.relayModels || [];
+  const kinds = ['文本', '图像', '向量', '语音', '重排'];
+  const grouped = kinds.map((kind) => ({ kind, items: models.filter((m) => modelKindOf(m) === kind) })).filter((group) => group.items.length);
+  const sections = grouped.map((group) => '<div class="panel-card"><h3 style="margin-bottom:12px">' + group.kind + '模型 · ' + group.items.length + '</h3>' +
+    '<div class="model-grid">' + group.items.map((m) => '<div class="model-chip"><b>' + esc(modelDisplayName(m)) + '</b><span>' + esc(modelGroupOf(m)) + '</span><em>' + esc(modelPriceText(m)) + '</em></div>').join('') + '</div></div>').join('');
+  return workspaceShell('<div style="max-width:1100px;margin:0 auto;padding:24px 18px">' +
+    '<div class="stats"><div class="stat"><b>' + models.length + '</b><span>可用模型</span></div><div class="stat"><b>' + ((state.relayGroups || []).length || 1) + '</b><span>模型分组</span></div><div class="stat"><b>3</b><span>兼容协议</span></div><div class="stat"><b>' + (relayConfigured() ? '在线' : '待配置') + '</b><span>中转状态</span></div></div>' +
+    relayNoticeCard() +
+    (sections || '<div class="panel-card"><p class="muted" style="margin:0">暂无可展示模型，配置中转站后会自动同步。</p></div>') +
+    '</div>', 'models');
+}
+function pricingPage() {
+  const models = state.relayModels || [];
+  const rows = models.slice(0, 300).map((m) => '<tr><td><b>' + esc(modelDisplayName(m)) + '</b></td><td>' + modelKindOf(m) + '</td><td>' + esc(modelGroupOf(m)) + '</td><td>' + esc(modelPriceText(m)) + '</td></tr>').join('');
+  return workspaceShell('<div style="max-width:1100px;margin:0 auto;padding:24px 18px">' +
+    '<div class="panel-card"><h3 style="margin-bottom:10px">计费说明</h3><p class="muted" style="margin:0 0 6px">1 积分 = 0.1 元，充值 10 元得 100 积分。文本模型按 token 用量计费，图像模型按次计费，站点创作台与中转接口共用同一份余额。</p><p class="muted" style="margin:0">价格随上游调整自动更新，下表为当前生效价格。</p></div>' +
+    '<div class="panel-card"><h3 style="margin-bottom:12px">模型价格</h3><table class="table"><thead><tr><th>模型</th><th>类型</th><th>分组</th><th>价格</th></tr></thead><tbody>' + (rows || '<tr><td colspan="4">暂无数据</td></tr>') + '</tbody></table></div>' +
+    '</div>', 'pricing');
+}
+function docsPage() {
+  const relay = state.relay || {};
+  const base = relay.baseUrl ? relay.baseUrl + '/v1' : 'https://api.zhihuiapi.cc/v1';
+  const origin = relay.baseUrl || 'https://api.zhihuiapi.cc';
+  return workspaceShell('<div style="max-width:980px;margin:0 auto;padding:24px 18px">' +
+    relayNoticeCard() +
+    '<div class="panel-card"><h3 style="margin-bottom:10px">第一步：获取 API Key</h3><p class="muted" style="margin:0">登录后进入「积分中心」，点击「领取 API Key」。Key 只在创建时完整显示一次，请妥善保存。</p></div>' +
+    '<div class="panel-card"><h3 style="margin-bottom:10px">OpenAI 兼容</h3><pre class="code-block">curl ' + base + '/chat/completions \\\n  -H "Authorization: Bearer $ZHIHUI_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"model":"gpt-4o-mini","messages":[{"role":"user","content":"你好"}]}\'</pre></div>' +
+    '<div class="panel-card"><h3 style="margin-bottom:10px">Claude 兼容</h3><pre class="code-block">curl ' + base + '/messages \\\n  -H "x-api-key: $ZHIHUI_API_KEY" \\\n  -H "anthropic-version: 2023-06-01" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"model":"claude-3-5-sonnet","max_tokens":512,"messages":[{"role":"user","content":"你好"}]}\'</pre></div>' +
+    '<div class="panel-card"><h3 style="margin-bottom:10px">Gemini 兼容</h3><pre class="code-block">curl "' + origin + '/v1beta/models/gemini-2.0-flash:generateContent" \\\n  -H "x-goog-api-key: $ZHIHUI_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"contents":[{"parts":[{"text":"你好"}]}]}\'</pre></div>' +
+    '<div class="panel-card"><h3 style="margin-bottom:10px">图像生成</h3><pre class="code-block">curl ' + base + '/images/generations \\\n  -H "Authorization: Bearer $ZHIHUI_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d \'{"model":"gpt-image-1","prompt":"电商主图，通透冰蓝色瓶身","size":"1024x1024"}\'</pre></div>' +
+    '<div class="panel-card"><h3 style="margin-bottom:10px">常见问题</h3><p class="muted" style="margin:0 0 6px">· 模型与价格可在「模型广场」「价格」页面查看，随上游自动同步。</p><p class="muted" style="margin:0 0 6px">· 余额不足时接口返回 402，可在积分中心使用兑换码充值。</p><p class="muted" style="margin:0">· 站点创作台与 CDR 插件使用同一账号和同一份余额，无需另外配置。</p></div>' +
+    '</div>', 'docs');
 }
 
 function settingsPage() {
@@ -498,6 +589,8 @@ async function adminPage() {
   try { const keyInfo = await api('/v1/admin/recharge-key'); rechargeKeyConfigured = Boolean(keyInfo.configured); } catch {}
   let shortCodeStatus = {};
   try { const sc = await api('/v1/admin/short-code'); shortCodeStatus = sc.status || {}; } catch {}
+  let relayConfig = {};
+  try { const rc = await api('/api/v1/admin/relay/config'); relayConfig = rc.config || {}; } catch {}
   const stats = d.stats || {};
   const userRows = (d.users || []).slice(-12).reverse().map((u) => `<tr><td>${esc(u.nickname || u.email || u.username || '')}</td><td>${esc(u.email || '')}</td><td>${u.role}</td><td>${money(u.points ?? u.credits)}</td><td>${new Date(u.createdAt).toLocaleString('zh-CN')}</td></tr>`).join('');
   const jobRows = (d.jobs || []).slice(0, 12).map((j) => `<tr><td>${esc(j.prompt || (j.requestId || '').slice(0, 12))}</td><td>${taskStatusLabel(j)}</td><td>${esc(j.model || '')}</td><td>${j.cost ?? ''}</td><td>${new Date(j.createdAt).toLocaleString('zh-CN')}</td></tr>`).join('');
@@ -518,6 +611,16 @@ async function adminPage() {
     </div>
     <div class="panel-card"><h3 style="margin-bottom:14px">AI 图像服务（运行时可切换上游）</h3><form id="ai-config-form"><div class="form-grid"><label class="field"><span>上游中转地址</span><input class="input" name="baseUrl" value="${esc(aiConfig.baseUrl || 'https://tokenflux.cloud/')}" placeholder="支持 https://host、https://host/v1 或完整接口地址"></label><label class="field"><span>生成模型</span><input class="input" name="model" value="${esc(aiConfig.model || 'gpt-image-2')}" placeholder="gpt-image-2"></label></div><label class="field"><span>上游 API Key</span><input class="input" name="apiKey" type="password" placeholder="留空表示不修改当前密钥"></label><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button class="btn primary" type="submit">保存并立即生效</button><button class="btn" type="button" id="ai-config-test">测试并读取模型</button></div><p id="ai-config-result" style="font-size:12px;color:#09835e"></p><p style="font-size:12px;color:#8a94a8;margin-top:8px">切换上游只需填这里并保存，无需重新部署；系统会自动兼容根地址、/v1 和完整接口地址。</p></form></div>
     <div class="panel-card"><h3 style="margin-bottom:14px">工作流上传 / 功能同步</h3><form id="workflow-form"><label class="field"><span>工作流 JSON（可粘贴或上传）</span><textarea class="input" name="workflow" style="min-height:150px" placeholder='{"code":"product-hero","name":"产品主视觉","version":1,...}'></textarea></label><input class="input" type="file" id="workflow-file" accept=".json,application/json" style="margin-top:10px"><button class="btn primary" style="margin-top:14px">上传并发布工作流</button><p id="workflow-result" style="font-size:12px;color:#09835e;white-space:pre-wrap"></p></form></div>
+    <div class="panel-card"><h3 style="margin-bottom:14px">中转站（new-api）</h3>
+      <p style="font-size:12px;color:#5f6b83;margin:0 0 12px">当前状态：<b>${relayConfig.baseUrl ? esc(relayConfig.baseUrl) : '未配置'}</b>${relayConfig.adminTokenConfigured ? ' · 管理员令牌已配置' : ''}${relayConfig.enabled === false ? ' · 已停用' : ''}<br>1 积分 = 10000 quota = 0.1 元；账号与额度会同步到中转站，两边共用同一份余额。</p>
+      <form id="relay-config-form"><div class="form-grid"><label class="field"><span>中转站地址</span><input class="input" name="baseUrl" value="${esc(relayConfig.baseUrl || '')}" placeholder="https://api.zhihuiapi.cc"></label><label class="field"><span>管理员令牌</span><input class="input" name="adminToken" type="password" placeholder="留空表示不修改"></label></div>
+      <label class="field" style="margin-top:10px"><span><input type="checkbox" name="enabled" ${relayConfig.enabled === false ? '' : 'checked'}> 启用账号与额度同步</span></label>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button class="btn primary" type="submit">保存中转站配置</button><button class="btn" type="button" id="relay-test">测试连接</button><button class="btn" type="button" id="relay-migrate">迁移存量用户</button></div>
+      <p id="relay-config-result" style="font-size:12px;color:#09835e;white-space:pre-wrap"></p></form>
+      <form id="relay-code-form" style="margin-top:16px;border-top:1px solid rgba(120,140,180,.18);padding-top:14px"><div class="form-grid"><label class="field"><span>兑换码积分</span><input class="input" name="points" type="number" min="1" value="100"></label><label class="field"><span>数量</span><input class="input" name="count" type="number" min="1" max="50" value="1"></label></div>
+      <button class="btn primary" style="margin-top:14px">在中转站生成兑换码</button>
+      <p id="relay-code-result" style="font-size:12px;color:#09835e;white-space:pre-wrap"></p></form>
+    </div>
     <div class="panel-card"><h3 style="margin-bottom:14px">ComfyUI 服务（超清放大 / 图转矢量）</h3>
       <form id="comfy-config-form"><div class="form-grid"><label class="field"><span>ComfyUI 地址</span><input class="input" name="baseUrl" value="${esc(comfyConfig.baseUrl || '')}" placeholder="http://127.0.0.1:8188 或反向代理地址"></label><label class="field"><span>访问密钥（可选）</span><input class="input" name="apiKey" type="password" placeholder="留空表示不修改当前密钥"></label></div>
       <label class="field" style="margin-top:10px"><span><input type="checkbox" name="enabled" ${comfyConfig.enabled === false ? '' : 'checked'}> 启用 ComfyUI 工作流执行</span></label>
@@ -548,7 +651,10 @@ async function render() {
     return;
   }
   if (state.page === 'history') { APP.innerHTML = await historyPage(); bindHistory(); return; }
-  if (state.page === 'wallet') { APP.innerHTML = walletPage(); bindWallet(); return; }
+  if (state.page === 'models') { await loadRelay(); await loadRelayModels(); APP.innerHTML = modelsPage(); bindPortal(); return; }
+  if (state.page === 'pricing') { await loadRelay(); await loadRelayModels(); APP.innerHTML = pricingPage(); bindPortal(); return; }
+  if (state.page === 'docs') { await loadRelay(); APP.innerHTML = docsPage(); bindPortal(); return; }
+  if (state.page === 'wallet') { await loadRelay(); APP.innerHTML = walletPage(); bindWallet(); return; }
   if (state.page === 'settings') { await loadModels(); APP.innerHTML = settingsPage(); bindSettings(); return; }
   if (state.page === 'admin') { APP.innerHTML = await adminPage(); bindAdmin(); return; }
   if (state.user) { state.page = 'studio'; location.hash = 'studio'; render(); return; }
@@ -556,6 +662,10 @@ async function render() {
 }
 
 function bindLanding() {
+  return;
+}
+
+function bindPortal() {
   return;
 }
 
@@ -1145,6 +1255,49 @@ function bindAdmin() {
       toast('短兑换码已生成', 'ok');
     } catch (err) { if (box) box.textContent = '生成失败：' + err.message; toast(err.message, 'error'); }
   };
+  const relayForm = $('#relay-config-form'); if (relayForm) relayForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(relayForm));
+    const box = $('#relay-config-result');
+    if (box) box.textContent = '正在保存…';
+    try {
+      const d = await api('/api/v1/admin/relay/config', { method: 'PUT', body: JSON.stringify({ baseUrl: f.baseUrl, adminToken: f.adminToken, enabled: f.enabled === 'on' }) });
+      if (box) box.textContent = d.message || '已保存';
+      toast('中转站配置已保存', 'ok');
+      setTimeout(() => render(), 900);
+    } catch (err) { if (box) box.textContent = '保存失败：' + err.message; toast(err.message, 'error'); }
+  };
+  const relayTest = $('#relay-test'); if (relayTest) relayTest.onclick = async () => {
+    const box = $('#relay-config-result');
+    if (box) box.textContent = '正在连接中转站…';
+    try {
+      const d = await api('/api/v1/admin/relay/test', { method: 'POST', body: JSON.stringify({}) });
+      if (box) box.textContent = d.message || '连接成功';
+      toast('中转站连接正常', 'ok');
+    } catch (err) { if (box) box.textContent = '连接失败：' + err.message; toast(err.message, 'error'); }
+  };
+  const relayMigrate = $('#relay-migrate'); if (relayMigrate) relayMigrate.onclick = async () => {
+    const box = $('#relay-config-result');
+    if (!confirm('将把现有用户的积分同步成中转站额度，已存在的账号会直接覆盖额度。继续吗？')) return;
+    if (box) box.textContent = '正在迁移…';
+    try {
+      const d = await api('/api/v1/admin/relay/migrate', { method: 'POST', body: JSON.stringify({}) });
+      const failed = (d.rows || []).filter((row) => !row.ok);
+      if (box) box.textContent = `迁移完成：共 ${d.total} 个用户，成功 ${d.linked}，失败 ${d.failed}` + (failed.length ? '\n失败明细：' + failed.map((row) => `${row.nickname}: ${row.error}`).join('；') : '');
+      toast('存量用户迁移完成', 'ok');
+    } catch (err) { if (box) box.textContent = '迁移失败：' + err.message; toast(err.message, 'error'); }
+  };
+  const relayCodeForm = $('#relay-code-form'); if (relayCodeForm) relayCodeForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(relayCodeForm));
+    const box = $('#relay-code-result');
+    if (box) box.textContent = '正在生成…';
+    try {
+      const d = await api('/api/v1/admin/relay/redemptions', { method: 'POST', body: JSON.stringify({ points: Number(f.points), count: Number(f.count) }) });
+      if (box) box.textContent = `已生成 ${d.codes.length} 个 ${d.points} 积分兑换码：\n` + d.codes.join('\n');
+      toast('兑换码已生成', 'ok');
+    } catch (err) { if (box) box.textContent = '生成失败：' + err.message; toast(err.message, 'error'); }
+  };
   const keyForm = $('#recharge-key-form'); if (keyForm) keyForm.onsubmit = async (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(keyForm));
@@ -1194,6 +1347,29 @@ function bindDelegated() {
       if (action === 'switch-auth') { state.mode = state.mode === 'login' ? 'register' : 'login'; render(); }
       if (action === 'logout') logout();
       if (action === 'open-settings') { state.page = 'settings'; location.hash = 'settings'; render(); }
+      if (action === 'go-docs') { state.page = 'docs'; location.hash = 'docs'; render(); return; }
+      if (action === 'load-relay-key') {
+        const box = $('#relay-key-box');
+        if (box) { box.style.display = 'block'; box.textContent = '正在领取…'; }
+        try {
+          const d = await api('/api/relay/key');
+          if (box) box.textContent = d.key + '\n\n接口地址：' + (d.baseUrl || '') + '/v1\n请立即复制保存，Key 仅在此处完整显示。';
+          if (d.key && navigator.clipboard) { try { await navigator.clipboard.writeText(d.key); toast('API Key 已生成并复制到剪贴板', 'ok'); } catch { toast('API Key 已生成，请手动复制', 'ok'); } }
+          else toast('API Key 已生成', 'ok');
+        } catch (err) { if (box) box.textContent = '领取失败：' + err.message; toast(err.message, 'error'); }
+        return;
+      }
+      if (action === 'load-relay-usage') {
+        const box = $('#relay-usage');
+        if (box) box.innerHTML = '<p class="muted" style="margin:0">正在读取…</p>';
+        try {
+          const d = await api('/api/relay/usage');
+          if (!d.synced) { if (box) box.innerHTML = '<p class="muted" style="margin:0">中转站尚未配置或暂时不可用。</p>'; return; }
+          const rows = (d.items || []).slice(0, 20).map((item) => '<tr><td>' + esc(item.model_name || item.model || '-') + '</td><td>' + money(Math.abs(Number(item.quota) || 0) / 10000) + ' 积分</td><td>' + (item.created_at ? new Date(item.created_at * 1000).toLocaleString('zh-CN') : '-') + '</td></tr>').join('');
+          if (box) box.innerHTML = '<table class="table"><thead><tr><th>模型</th><th>消耗</th><th>时间</th></tr></thead><tbody>' + (rows || '<tr><td colspan="3">暂无记录</td></tr>') + '</tbody></table>';
+        } catch (err) { if (box) box.innerHTML = '<p class="muted" style="margin:0">读取失败：' + esc(err.message) + '</p>'; }
+        return;
+      }
       if (action === 'delete-comfy-preset') {
         const code = actionEl.dataset.code;
         if (code && confirm('删除自定义工作流预设 ' + code + '？')) {
