@@ -1,81 +1,69 @@
-# 郅绘中转站部署说明
+# 郅绘部署说明
 
-> 2026-09-20 起，`zhihuiapi.cc` 已从「郅绘创作台门户」整体切换为 **new-api 中转站**。
-> 创作台、画布、积分体系与 CDR 插件接口同时下线，相关代码保留在本仓库作为历史与备份。
+## 现网形态（一台服务器跑两套，互不影响）
 
-## 现网形态
+服务器：阿里云杭州 `47.114.52.219`（Ubuntu 24.04，2 核 2G），nginx 统一入口 + Let's Encrypt 证书。
 
-| 项目 | 值 |
-| --- | --- |
-| 站点 | `https://zhihuiapi.cc`（`www` 归一，`relay.` / `api.` 301 到主域名） |
-| 服务器 | 阿里云杭州 `47.114.52.219`，Ubuntu 24.04，2C2G |
-| 应用 | new-api 单容器（`calciumion/new-api:latest`），仅监听 `127.0.0.1:3000` |
-| 入口 | 宿主机 nginx 反向代理，Let's Encrypt 证书由 certbot 自动续期 |
-| 数据 | `/opt/zhihui/deploy/newapi-data/one-api.db`（SQLite，随容器卷持久化） |
-| 部署目录 | `/opt/zhihui/deploy`（compose、`.env`、`branding/`、证书无关的 nginx 源文件副本） |
+| 域名 | 指向 | 内容 |
+| --- | --- | --- |
+| `zhihuiapi.cc` / `www.zhihuiapi.cc` | `zhihui` 容器（8787） | 官网首页、登录注册、创作台、**无限画布**、模型广场、积分中心、下载插件 |
+| `api.zhihuiapi.cc` | 同一个 `zhihui` 容器 | 站点接口：`/v1/auth/*`、`/v1/studio/*`、`/v1/image/*`、`/api/v1/studio/*`、`/plugin-config.json` |
+| `relay.zhihuiapi.cc` | `new-api` 容器（3000） | AI 模型中转站：模型广场、控制台、`/v1/*` OpenAI 兼容接口 |
+
+CDR 插件读取 `https://zhihuiapi.cc/plugin-config.json`，服务端接口在 `api.zhihuiapi.cc`，与站点账号、积分实时同步。
+
+## 目录与数据
+
+```
+/opt/zhihui/                     应用代码（Dockerfile / server / web）
+/opt/zhihui/deploy/
+├── docker-compose.yml           两个服务
+├── .env                         全部密钥（勿改 SESSION_SECRET / CRYPTO_SECRET）
+├── data/                        站点数据：store.json（用户/积分/任务/兑换）+ references 参考图
+├── newapi-data/one-api.db       中转站数据
+├── branding/                    logo.png / favicon.ico / alipay.jpg / pay.html
+└── nginx/zhihuiapi.cc.conf      nginx 源文件副本
+```
 
 ## 常用操作
 
 ```bash
 cd /opt/zhihui/deploy
-docker compose ps                      # 状态
-docker compose logs -f new-api         # 日志
-docker compose restart new-api         # 重启
-docker compose pull && docker compose up -d   # 升级镜像
-
-nginx -t && systemctl reload nginx     # 改完 nginx 配置后
-certbot renew --dry-run                # 检查证书续期
+docker compose ps                       # 状态
+docker compose logs -f zhihui           # 站点日志
+docker compose logs -f new-api          # 中转站日志
+docker compose up -d --build            # 改完代码后重建
+nginx -t && systemctl reload nginx      # 改完 nginx 后
+certbot renew --dry-run                 # 证书续期自检
 ```
 
 ## 站点配置
 
-站点品牌、导航、注册开关等都在 new-api 后台「系统设置」里维护；也可以用系统访问令牌直接调接口：
+- 管理员密钥：`deploy/.env` 的 `ZH_ADMIN_KEY`（首次启动创建 admin 用，也可作为 `x-admin-key` 请求头）
+- 上游 AI：运营后台「AI 图像服务」里可随时改中转地址与 API Key，改完即生效，无需重新部署
+- 充值：`https://zhihuiapi.cc/pay` 是收款码 + 人工发码页；短码兑换依赖 `ZH_RECHARGE_SHORT_SECRET`，**不要更换**，否则插件生成的旧兑换码会失效
 
-```bash
-TOKEN=$(cat /root/.newapi-access-token)   # 管理员系统访问令牌（服务器本地文件）
-curl -X PUT http://127.0.0.1:3000/api/option/ \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"key":"SystemName","value":"郅绘中转站"}'
-```
+## 中转站配置
 
-当前关键配置：
-
-- 站名 `郅绘中转站`，Logo `https://zhihuiapi.cc/logo.png`（由 nginx 从 `deploy/branding/` 提供）
-- 主题：前端预设为浏览器本地设置，已通过「页脚 HTML」注入青绿主色（`--primary:#00d294`），全站默认白底青绿
-- 导航：主页 / 控制台 / 模型广场 / 文档；注册开放，邮箱验证与人机验证关闭
-- 分组：仅 `default`；充值只走兑换码，不接在线支付
-
-## 充值（收款码 + 人工发码）
-
-没有支付宝商户号，个人/经营收款码不提供服务端回调，因此**无法自动到账**。当前做法：
-
-- 收款码放在服务器 `deploy/branding/alipay.jpg`，由 nginx 通过 `/branding/` 直接提供（图片不进仓库）
-- 充值说明页 `deploy/branding/pay.html`，对外地址 `https://zhihuiapi.cc/pay`（nginx `location = /pay`）
-- new-api 的 `TopUpLink` 指向该页，控制台「钱包 → 充值」会跳过去；`PayMethods` 已清空，避免出现没有网关的支付按钮
-- 流程：用户扫码付款 → 备注站点用户名 → 把「用户名 + 金额 + 订单尾号」发给管理员 → 管理员在后台「兑换」页生成兑换码发回 → 用户在钱包兑换到账
-
-要改成**全自动到账**，需要开通支付宝「当面付」（小微商户可申请），拿到 APPID/PID/应用私钥后接入异步通知；否则这套人工发码流程是唯一可行方案。
-
-## 上游渠道
-
-渠道在 new-api 后台「渠道」页维护。当前一条 `TokenFlux` 渠道指向 `https://tokenflux.cloud`，提供 12 个文本模型。
-
-注意两点：
-
-1. 渠道的 `base_url` 必须指向真实可达的 OpenAI 兼容地址；留空会默认走 `api.openai.com`，在国内服务器上不可达。
-2. 令牌的「分组」必须与渠道所在分组一致，否则会出现「连接成功但模型列表为 0」。
+- 后台：`https://relay.zhihuiapi.cc`，系统访问令牌在服务器 `/root/.newapi-access-token`
+- 渠道：TokenFlux（主，文本+图像）、Krapi 国模 / Krapi GPT（备用）、Pollinations（免费分组）
+- 价格：沿用 new-api 开源内置价目表，并与参考站市价对齐；文本按倍率、图像按次
 
 ## 备份与恢复
 
 ```bash
-# 备份（数据 + 配置 + nginx + 证书续期配置）
-tar czf /root/backups/zhihuiapi-$(date +%F).tar.gz -C / \
+# 备份
+tar czf /root/backups/zhihui-$(date +%F).tar.gz -C / \
   opt/zhihui etc/nginx/sites-available etc/letsencrypt/renewal
 
-# 恢复数据库（先停容器）
-cd /opt/zhihui/deploy && docker compose stop new-api
-cp /root/backups/xxx/opt/zhihui/deploy/newapi-data/one-api.db ./newapi-data/one-api.db
-docker compose start new-api
+# 恢复站点数据（停容器→覆盖→起容器）
+cd /opt/zhihui/deploy && docker compose stop zhihui
+tar xzf /root/backups/xxx.tar.gz -C /tmp/restore opt/zhihui/deploy/data
+cp -a /tmp/restore/opt/zhihui/deploy/data/. ./data/
+docker compose start zhihui
 ```
 
-2026-09-20 改造前的完整备份（含郅绘 `store.json`、new-api 原始库）保存在服务器 `/root/backups/`，并同步了一份到部署者本机桌面。
+## 历史
+
+2026-09-20 曾把整站切换为纯 new-api 中转站，当天按用户要求**已还原**为「创作台/画布 + 中转站并存」的形态。
+改造前的完整备份（含应用代码、站点数据、new-api 库、nginx 与证书配置）保存在服务器 `/root/backups/zhihui-backup-20260920-013836.tar.gz`，并保留了一份在部署者本机。

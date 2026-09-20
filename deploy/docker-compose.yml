@@ -1,18 +1,38 @@
-# 郅绘中转站：单机 new-api
+# 郅绘：创作台/画布站点 + new-api 中转站（同机共存）
 #
 # 服务器：阿里云杭州 47.114.52.219（Ubuntu 24.04）
-# 入口：nginx 反代 127.0.0.1:3000，域名为 zhihuiapi.cc
-# 数据：./newapi-data/one-api.db（SQLite，务必随卷备份）
+#   zhihuiapi.cc / www  -> zhihui 容器（127.0.0.1:8787），创作台 + 无限画布 + 站点接口
+#   api.zhihuiapi.cc    -> 同一个 zhihui 容器（前端写死了这个接口域名）
+#   relay.zhihuiapi.cc  -> new-api 容器（127.0.0.1:3000），AI 模型中转站
+#
+# 数据：
+#   ./data/store.json        -> 站点数据（用户 / 积分 / 任务 / 兑换 / 参考图）
+#   ./newapi-data/one-api.db -> 中转站数据
 #
 # 常用命令：
-#   docker compose ps                    查看状态
-#   docker compose logs -f new-api       查看日志
-#   docker compose up -d                 启动
-#   docker compose pull && docker compose up -d   升级镜像
-#
+#   docker compose ps
+#   docker compose logs -f zhihui
+#   docker compose up -d --build
 name: zhihui
 
 services:
+  zhihui:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: zhihui-web:local
+    container_name: zhihui-web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "8787"
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:8787:8787"
+
   new-api:
     image: calciumion/new-api:latest
     container_name: zhihui-new-api
@@ -21,10 +41,8 @@ services:
     environment:
       TZ: Asia/Shanghai
       PORT: "3000"
-      # nginx 在宿主机上，容器看到的来源 IP 是宿主机网桥
       TRUSTED_PROXIES: "127.0.0.1,172.16.0.0/12"
     volumes:
-      # SQLite 数据必须落盘，否则重启丢数据
       - ./newapi-data:/data
     ports:
       - "127.0.0.1:3000:3000"
