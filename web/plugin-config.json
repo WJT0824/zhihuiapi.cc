@@ -1,13 +1,12 @@
 {
   "serviceUrl": "https://zhihuiapi.cc/",
-  "apiOrigin": "https://api.zhihuiapi.cc/",
+  "apiOrigin": "https://zhihuiapi.cc/",
   "mode": 0,
   "chatModel": "gpt-4.1-mini",
   "generationModel": "gpt-image-2",
   "editModel": "gpt-image-2",
   "pointsPerGeneration": 3,
-  "workflowsUrl": "https://api.zhihuiapi.cc/v1/studio/workflows/public",
-  "relayOrigin": "https://relay.zhihuiapi.cc/",
+  "workflowsUrl": "https://zhihuiapi.cc/v1/studio/workflows/public",
   "comfyEnabled": false,
   "workflows": [
     {
